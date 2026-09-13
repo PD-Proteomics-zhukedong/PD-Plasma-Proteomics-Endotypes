@@ -1,7 +1,8 @@
 # ==============================================================================
 # Script: 01_preprocessing_imputation_split_combat.R
-# Purpose: Data preprocessing, completeness filtering, MNAR imputation, and batch correction
 # Project: Large-scale plasma proteomics in Parkinson's disease
+# Description: Data filtering (30% threshold), MNAR normal downshift imputation,
+#              and cohort-independent Split-ComBat batch harmonization.
 # ==============================================================================
 
 options(expressions = 5000)
@@ -27,7 +28,7 @@ cat("=== Phase 1: Proteomics Data Preprocessing and Harmonization ===\n")
 # ==============================================================================
 cat("Loading metadata and raw quantification matrix...\n")
 
-clin_raw_file <- file.path(data_dir, "metadata_clinical_n1119.csv")
+clin_raw_file <- file.path(data_dir, "metadata_clinical.csv")
 batch_file    <- file.path(data_dir, "batch_info.csv")
 raw_pg_file   <- file.path(data_dir, "raw_dia_protein_matrix.tsv")
 

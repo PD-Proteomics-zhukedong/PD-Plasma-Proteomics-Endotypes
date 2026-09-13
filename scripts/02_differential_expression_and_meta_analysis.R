@@ -1,7 +1,8 @@
 # ==============================================================================
 # Script: 02_differential_expression_and_meta_analysis.R
-# Purpose: Limma DEA (6 Covariates), Stouffer Meta-Analysis, and Figure 1 (B-G)
-# Project: Large-scale plasma proteomics in Parkinson's disease
+# Purpose: Dual-Model Limma (Basic + Full), Stouffer Meta-Analysis, 
+#          Generation of ST4, ST5, ST9, ST10, and Publication Figures 1B-G
+# Project: Large-scale plasma proteomics in Parkinson's disease (Nature Aging)
 # ==============================================================================
 
 options(expressions = 5000)
@@ -28,6 +29,9 @@ suppressPackageStartupMessages({
   library(stringr)
 })
 
+# Cross-platform PDF device fallback
+pdf_device <- if (capabilities("cairo")) cairo_pdf else "pdf"
+
 # Directory setup
 input_dir  <- "results/01_preprocessed_data"
 data_dir   <- "data"
@@ -37,7 +41,10 @@ if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
 FDR_CUTOFF   <- 0.05
 P_CUTOFF     <- 0.05
 FC_THRESHOLD <- log2(1.5)
-BASE_COVARIATES <- c("age", "sex", "BMI", "hepatic_disease", "kidney.function", "CV_Metabolic_Cat")
+
+# Covariate sets
+BASIC_COVARIATES <- c("age", "sex")
+FULL_COVARIATES  <- c("age", "sex", "BMI", "hepatic_disease", "kidney.function", "CV_Metabolic_Cat")
 
 # Helper functions
 get_mode <- function(x) {
@@ -55,14 +62,14 @@ format_ontology_label <- function(text_vec, max_width = 34) {
     stringr::str_wrap(width = max_width)
 }
 
-cat("\n=== Phase 2: Differential Expression and Figure 1 Pipeline ===\n")
+cat("\n=== Phase 2: Differential Expression, Meta-Analysis, and Figure 1 Pipeline ===\n")
 
 # ==============================================================================
 # Step 1: Clinical Metadata Harmonization
 # ==============================================================================
 cat("Harmonizing clinical covariates per cohort...\n")
 
-clin_raw_file <- file.path(data_dir, "metadata_clinical_n1119.csv")
+clin_raw_file <- file.path(data_dir, "metadata_clinical.csv")
 clinical_raw  <- read.csv(clin_raw_file, stringsAsFactors = FALSE)
 colnames(clinical_raw) <- make.names(colnames(clinical_raw))
 
@@ -101,7 +108,7 @@ clinical_clean <- clinical_raw %>%
   )
 
 # ==============================================================================
-# Step 2: Limma Modeling and Meta-Analysis
+# Step 2: Limma Modeling (Basic & Full Models) and Stouffer Meta-Analysis
 # ==============================================================================
 cat("Running linear modeling with empirical Bayes (limma) and meta-analysis...\n")
 
@@ -112,13 +119,16 @@ expr_combat_all <- as.matrix(combat_raw[, 7:ncol(combat_raw)])
 train_clin <- clinical_clean %>% filter(cohort == "Discovery" & sample %in% colnames(expr_combat_all))
 val_clin   <- clinical_clean %>% filter(cohort == "Validation" & sample %in% colnames(expr_combat_all))
 
-run_limma_analysis <- function(expr_mat, clin_df, base_covariates) {
+N_disc <- nrow(train_clin)
+N_rep  <- nrow(val_clin)
+
+run_limma_analysis <- function(expr_mat, clin_df, covariates) {
   common_samps <- intersect(colnames(expr_mat), clin_df$sample)
   expr_sub <- expr_mat[, common_samps]
   clin_sub <- clin_df[match(common_samps, clin_df$sample), ]
   
   valid_covs <- c()
-  for (cov in base_covariates) {
+  for (cov in covariates) {
     if (cov %in% colnames(clin_sub)) {
       vals <- na.omit(clin_sub[[cov]])
       if (length(unique(vals)) > 1) valid_covs <- c(valid_covs, cov)
@@ -135,26 +145,47 @@ run_limma_analysis <- function(expr_mat, clin_df, base_covariates) {
   res_tab %>% dplyr::select(protein, estimate = logFC, p.value = P.Value, fdr = adj.P.Val, t_stat = t)
 }
 
-limma_disc <- run_limma_analysis(expr_combat_all, train_clin, BASE_COVARIATES) %>%
+# --- 2A: Basic Model (Age + Sex) ---
+cat("  - Computing Basic Model (~ group + age + sex) for Discovery and Validation...\n")
+limma_disc_basic <- run_limma_analysis(expr_combat_all, train_clin, BASIC_COVARIATES) %>%
+  rename(est_disc_basic = estimate, p_disc_basic = p.value, fdr_disc_basic = fdr, t_disc_basic = t_stat)
+
+limma_rep_basic  <- run_limma_analysis(expr_combat_all, val_clin, BASIC_COVARIATES) %>%
+  rename(est_rep_basic = estimate, p_rep_basic = p.value, fdr_rep_basic = fdr, t_rep_basic = t_stat)
+
+meta_basic <- limma_disc_basic %>%
+  inner_join(limma_rep_basic, by = "protein") %>%
+  mutate(
+    p_disc_safe = pmin(pmax(p_disc_basic, 1e-300), 1 - 1e-16),
+    p_rep_safe  = pmin(pmax(p_rep_basic, 1e-300), 1 - 1e-16),
+    z_disc = sign(est_disc_basic) * qnorm(p_disc_safe / 2, lower.tail = FALSE),
+    z_rep  = sign(est_rep_basic)  * qnorm(p_rep_safe / 2, lower.tail = FALSE),
+    z_meta_basic = (sqrt(N_disc) * z_disc + sqrt(N_rep) * z_rep) / sqrt(N_disc + N_rep),
+    meta_p_basic = pmax(2 * pnorm(abs(z_meta_basic), lower.tail = FALSE), 1e-300),
+    meta_fdr_basic = p.adjust(meta_p_basic, method = "BH"),
+    meta_est_basic = (est_disc_basic + est_rep_basic) / 2
+  ) %>%
+  dplyr::select(protein, est_disc_basic, p_disc_basic, fdr_disc_basic, t_disc_basic,
+                est_rep_basic, p_rep_basic, fdr_rep_basic, t_rep_basic,
+                z_meta_basic, meta_p_basic, meta_fdr_basic, meta_est_basic)
+
+# --- 2B: Full Model (Age + Sex + BMI + Hepatic + Renal + CV/Metabolic) ---
+cat("  - Computing Full Model (~ group + 6 Covariates) for Discovery and Validation...\n")
+limma_disc <- run_limma_analysis(expr_combat_all, train_clin, FULL_COVARIATES) %>%
   rename(est_disc = estimate, p_disc = p.value, fdr_disc = fdr, t_disc = t_stat) %>%
   mutate(Status_Disc = case_when(
     fdr_disc < FDR_CUTOFF & est_disc > FC_THRESHOLD ~ "Up in Discovery",
     fdr_disc < FDR_CUTOFF & est_disc < -FC_THRESHOLD ~ "Down in Discovery",
     TRUE ~ "NS"
   ))
-write.csv(limma_disc, file.path(output_dir, "Table_1_Discovery_Limma_Full_Model.csv"), row.names = FALSE)
 
-limma_rep <- run_limma_analysis(expr_combat_all, val_clin, BASE_COVARIATES) %>%
+limma_rep <- run_limma_analysis(expr_combat_all, val_clin, FULL_COVARIATES) %>%
   rename(est_rep = estimate, p_rep = p.value, fdr_rep = fdr, t_rep = t_stat) %>%
   mutate(Status_Rep = case_when(
     p_rep < P_CUTOFF & est_rep > 0 ~ "Up in Validation",
     p_rep < P_CUTOFF & est_rep < 0 ~ "Down in Validation",
     TRUE ~ "NS"
   ))
-write.csv(limma_rep, file.path(output_dir, "Table_2_Validation_Limma_Full_Model.csv"), row.names = FALSE)
-
-N_disc <- nrow(train_clin)
-N_rep  <- nrow(val_clin)
 
 meta_final <- limma_disc %>%
   inner_join(limma_rep, by = "protein") %>%
@@ -162,7 +193,7 @@ meta_final <- limma_disc %>%
     p_disc_safe = pmin(pmax(p_disc, 1e-300), 1 - 1e-16),
     p_rep_safe  = pmin(pmax(p_rep, 1e-300), 1 - 1e-16),
     z_disc = sign(est_disc) * qnorm(p_disc_safe / 2, lower.tail = FALSE),
-    z_rep  = sign(est_rep) * qnorm(p_rep_safe / 2, lower.tail = FALSE),
+    z_rep  = sign(est_rep)  * qnorm(p_rep_safe / 2, lower.tail = FALSE),
     z_meta = (sqrt(N_disc) * z_disc + sqrt(N_rep) * z_rep) / sqrt(N_disc + N_rep),
     meta_p = pmax(2 * pnorm(abs(z_meta), lower.tail = FALSE), 1e-300),
     meta_fdr = p.adjust(meta_p, method = "BH"),
@@ -173,17 +204,12 @@ meta_final <- limma_disc %>%
     meta_fdr < FDR_CUTOFF & est_disc < -FC_THRESHOLD & est_rep < 0 ~ "Strictly Validated Down",
     TRUE ~ "Filtered Out"
   ))
-write.csv(meta_final, file.path(output_dir, "Table_3_Final_Strict_DEPs_StoufferMeta.csv"), row.names = FALSE)
 
 n_meta_up   <- sum(meta_final$Final_Status == "Strictly Validated Up")
 n_meta_down <- sum(meta_final$Final_Status == "Strictly Validated Down")
-cat(sprintf("Identified %d Meta-DEPs (Up: %d, Down: %d).\n", n_meta_up + n_meta_down, n_meta_up, n_meta_down))
+cat(sprintf("Identified %d strictly validated Meta-DEPs (Up: %d, Down: %d).\n", n_meta_up + n_meta_down, n_meta_up, n_meta_down))
 
-# ==============================================================================
-# Step 3: Generate Figure 1B-D (Volcano Plots)
-# ==============================================================================
-cat("Generating Figure 1B-D volcano plots...\n")
-
+# --- 2C: Protein Symbol Annotation ---
 clean_uniprots <- sapply(strsplit(meta_final$protein, ";"), `[`, 1) %>% gsub("-.*|\\..*", "", .)
 mapped_symbols <- suppressMessages(suppressWarnings(
   mapIds(org.Hs.eg.db, keys = clean_uniprots, column = "SYMBOL", keytype = "UNIPROT", multiVals = "first")
@@ -192,7 +218,78 @@ mapped_symbols[is.na(mapped_symbols)] <- clean_uniprots[is.na(mapped_symbols)]
 lookup <- setNames(as.character(mapped_symbols), meta_final$protein)
 meta_final$Symbol <- unname(lookup[meta_final$protein])
 
-# Identify top representative biomarkers for labeling
+# --- 2D: Export Supplementary Table 4 (Full Proteome Statistics, R1 Minor 2 Defense) ---
+cat("Exporting Supplementary Table 4 (Basic + Full Model Across Full Proteome)...\n")
+st4_full_proteome <- meta_basic %>%
+  inner_join(meta_final, by = "protein") %>%
+  mutate(UNIPROT_Accession = sapply(strsplit(protein, ";"), `[`, 1) %>% gsub("-.*|\\..*", "", .)) %>%
+  dplyr::select(
+    Protein_Group = protein,
+    UNIPROT_ID = UNIPROT_Accession,
+    Gene_Symbol = Symbol,
+    # Discovery Basic
+    Discovery_Basic_log2FC = est_disc_basic,
+    Discovery_Basic_Pval = p_disc_basic,
+    Discovery_Basic_FDR = fdr_disc_basic,
+    # Validation Basic
+    Validation_Basic_log2FC = est_rep_basic,
+    Validation_Basic_Pval = p_rep_basic,
+    Validation_Basic_FDR = fdr_rep_basic,
+    # Meta Basic
+    Meta_Basic_Zscore = z_meta_basic,
+    Meta_Basic_Pval = meta_p_basic,
+    Meta_Basic_FDR = meta_fdr_basic,
+    Meta_Basic_log2FC = meta_est_basic,
+    # Discovery Full
+    Discovery_Full_log2FC = est_disc,
+    Discovery_Full_Pval = p_disc,
+    Discovery_Full_FDR = fdr_disc,
+    # Validation Full
+    Validation_Full_log2FC = est_rep,
+    Validation_Full_Pval = p_rep,
+    Validation_Full_FDR = fdr_rep,
+    # Meta Full
+    Meta_Full_Zscore = z_meta,
+    Meta_Full_Pval = meta_p,
+    Meta_Full_FDR = meta_fdr,
+    Meta_Full_log2FC = meta_est,
+    # Final Consensus Validation Status
+    Final_Validation_Status = Final_Status
+  )
+
+write.csv(st4_full_proteome, file.path(output_dir, "Supplementary_Table_4_Full_Proteome_Statistics.csv"), row.names = FALSE)
+cat(sprintf("  - ST4 successfully exported (%d proteins, Basic and Full models complete).\n", nrow(st4_full_proteome)))
+
+# --- 2E: Export Supplementary Table 5 (Strict Meta-DEPs) ---
+cat("Exporting Supplementary Table 5 (823 Strict Meta-DEPs)...\n")
+st5_strict_deps <- meta_final %>%
+  filter(Final_Status %in% c("Strictly Validated Up", "Strictly Validated Down")) %>%
+  mutate(UNIPROT_ID = sapply(strsplit(protein, ";"), `[`, 1) %>% gsub("-.*|\\..*", "", .)) %>%
+  dplyr::select(
+    Protein_Group = protein,
+    UNIPROT_ID = UNIPROT_ID,
+    Gene_Symbol = Symbol,
+    Discovery_log2FC = est_disc,
+    Discovery_Pval = p_disc,
+    Discovery_FDR = fdr_disc,
+    Validation_log2FC = est_rep,
+    Validation_Pval = p_rep,
+    Validation_FDR = fdr_rep,
+    Meta_Zscore = z_meta,
+    Meta_Pval = meta_p,
+    Meta_FDR = meta_fdr,
+    Meta_log2FC = meta_est,
+    Consensus_Regulation = Final_Status
+  )
+
+write.csv(st5_strict_deps, file.path(output_dir, "Supplementary_Table_5_Strict_MetaDEPs.csv"), row.names = FALSE)
+cat(sprintf("  - ST5 successfully exported (%d Meta-DEPs).\n", nrow(st5_strict_deps)))
+
+# ==============================================================================
+# Step 3: Generate Figure 1B-D (Volcano Plots)
+# ==============================================================================
+cat("Generating Figure 1B-D volcano plots...\n")
+
 blacklist_regex <- "^(RPL|RPS|KRT|HBA|HBB|HBD|MYH|ACT|TUB|IGH|IGK|IGL|ALB)"
 valid_meta_candidates <- meta_final %>% filter(!grepl(blacklist_regex, Symbol))
 
@@ -283,13 +380,13 @@ p3 <- plot_volcano_publication(meta_final_plot, "meta_est", "meta_log10_fdr", "F
                                landmark_proteins, n_meta_down, n_meta_up, FC_THRESHOLD, FDR_CUTOFF, 45)
 
 final_volcano <- p1 | p2 | p3
-ggsave(file.path(output_dir, "Figure1BCD_Volcano_Panels.pdf"), final_volcano, width = 16, height = 5.3, device = cairo_pdf)
+ggsave(file.path(output_dir, "Figure1BCD_Volcano_Panels.pdf"), final_volcano, width = 16, height = 5.3, device = pdf_device)
 ggsave(file.path(output_dir, "Figure1BCD_Volcano_Panels.png"), final_volcano, width = 16, height = 5.3, dpi = 300)
 
 # ==============================================================================
-# Step 4: Generate Figure 1E (GO-BP Functional Landscape)
+# Step 4: Generate Figure 1E (GO-BP Functional Landscape Constrained to Background)
 # ==============================================================================
-cat("Performing GO-BP enrichment and generating Figure 1E...\n")
+cat("Performing GO-BP enrichment constrained to 3,946 plasma universe (Figure 1E)...\n")
 
 tested_uniprots <- unique(sapply(strsplit(rownames(expr_combat_all), ";"), `[`, 1)) %>% gsub("-.*|\\..*", "", .)
 bg_map <- suppressMessages(suppressWarnings(
@@ -313,7 +410,10 @@ comp_go <- compareCluster(geneCluster = gene_clusters, fun = "enrichGO", OrgDb =
                           pvalueCutoff = 1, qvalueCutoff = 1, minGSSize = 5, maxGSSize = 500, 
                           universe = universe_entrez, readable = TRUE)
 df_go <- as.data.frame(comp_go)
-write.csv(df_go, file.path(output_dir, "Table_ST11_GO_BP_MetaDEPs_Full.csv"), row.names = FALSE)
+
+# Export Supplementary Table 9 (GO-BP Meta-DEPs Full Table)
+cat("Exporting Supplementary Table 9 (Constrained GO-BP Enrichment)...\n")
+write.csv(df_go, file.path(output_dir, "Supplementary_Table_9_GO_BP_MetaDEPs_Full.csv"), row.names = FALSE)
 
 # Functional ontology themes
 go_theme_dict <- list(
@@ -343,7 +443,6 @@ for(thm in names(go_theme_dict)) {
   processed_all$Theme[match_idx] <- thm
 }
 
-# Select top pathways per functional theme
 selected_df <- processed_all %>%
   filter(Theme != "Others" & pvalue < 0.05) %>%
   group_by(Theme) %>%
@@ -407,119 +506,195 @@ p_fig1e <- ggplot(plot_data_final, aes(x = Cluster_Plot, y = Display_Name)) +
     plot.title = element_text(face = "bold", size = 12, hjust = 0.5)
   )
 
-ggsave(file.path(output_dir, "Figure1E_Functional_Landscape.pdf"), p_fig1e, width = 7.8, height = 7.5, device = cairo_pdf)
+ggsave(file.path(output_dir, "Figure1E_Functional_Landscape.pdf"), p_fig1e, width = 7.8, height = 7.5, device = pdf_device)
+ggsave(file.path(output_dir, "Figure1E_Functional_Landscape.png"), p_fig1e, width = 7.8, height = 7.5, dpi = 300)
 
 # ==============================================================================
-# Step 5: Generate Figure 1F (Louvain PPI Hub Network)
+# Step 5: Protein-Protein Interaction (PPI) Network and Louvain Modularity (Figure 1F)
 # ==============================================================================
-cat("Constructing PPI network and generating Figure 1F...\n")
+cat("\n[Step 5] Constructing PPI network and identifying topological hub modules...\n")
 
 gold_deps_df <- meta_final %>% 
   filter(Final_Status %in% c("Strictly Validated Up", "Strictly Validated Down")) %>%
   mutate(Clean_UNIPROT = sapply(strsplit(protein, ";"), `[`, 1) %>% gsub("-.*|\\..*", "", .))
 
 gene_map_ppi <- suppressMessages(suppressWarnings(
-  bitr(gold_deps_df$Clean_UNIPROT, fromType="UNIPROT", toType="SYMBOL", OrgDb=org.Hs.eg.db)
+  bitr(gold_deps_df$Clean_UNIPROT, fromType = "UNIPROT", toType = "SYMBOL", OrgDb = org.Hs.eg.db)
 )) %>% distinct(UNIPROT, .keep_all = TRUE)
 
-genes_str <- paste(unique(gene_map_ppi$SYMBOL)[1:min(400, length(unique(gene_map_ppi$SYMBOL)))], collapse = "%0d")
-url <- paste0("https://string-db.org/api/tsv/network?identifiers=", genes_str, "&species=9606&required_score=700")
+string_dir <- Sys.getenv("STRING_DB_DIR", unset = file.path(data_dir, "string_db"))
+links_file <- file.path(string_dir, "9606.protein.links.v12.0.txt.gz")
+info_file  <- file.path(string_dir, "9606.protein.info.v12.0.txt.gz")
+use_local_string <- file.exists(links_file) && file.exists(info_file)
 
-edges_df <- tryCatch({ read.table(url, header = TRUE, sep = "\t", stringsAsFactors = FALSE) }, error = function(e) NULL)
-
-if (!is.null(edges_df) && nrow(edges_df) > 0) {
-  sub_links <- edges_df %>% dplyr::select(from = preferredName_A, to = preferredName_B, score = score) %>% distinct()
-  g_initial <- simplify(graph_from_data_frame(sub_links, directed = FALSE))
+if (use_local_string) {
+  cat(sprintf("  - Local STRING database detected in '%s'. Loading pre-indexed interactions...\n", string_dir))
+  prot_info <- fread(info_file, sep = "\t", data.table = FALSE)
+  target_info <- prot_info %>% filter(preferred_name %in% gene_map_ppi$SYMBOL)
+  target_string_ids <- target_info$`#string_protein_id`
   
-  degree_scores      <- degree(g_initial)
-  betweenness_scores <- betweenness(g_initial, directed = FALSE, normalized = TRUE)
+  all_links <- fread(links_file, sep = " ", data.table = FALSE)
+  sub_links <- all_links %>% 
+    filter(protein1 %in% target_string_ids & protein2 %in% target_string_ids & combined_score >= 700) %>%
+    dplyr::select(from = protein1, to = protein2, score = combined_score)
   
-  mcc_scores <- setNames(numeric(vcount(g_initial)), V(g_initial)$name)
-  clqs <- cliques(g_initial, min = 2, max = 5)
-  for (clq in clqs) {
-    size <- length(clq)
-    mcc_scores[names(clq)] <- mcc_scores[names(clq)] + factorial(size - 1)
+  id_to_sym <- setNames(target_info$preferred_name, target_info$`#string_protein_id`)
+  sub_links$from <- id_to_sym[sub_links$from]
+  sub_links$to   <- id_to_sym[sub_links$to]
+  sub_links <- na.omit(sub_links)
+} else {
+  cat("  - [Notice] Local STRING database files not found in 'data/string_db/'. Retrieving via API...\n")
+  all_syms <- unique(gene_map_ppi$SYMBOL)
+  chunk_size <- 250
+  sym_chunks <- split(all_syms, ceiling(seq_along(all_syms) / chunk_size))
+  sub_links_list <- list()
+  for (chk in sym_chunks) {
+    genes_str <- paste(chk, collapse = "%0d")
+    url <- paste0("https://string-db.org/api/tsv/network?identifiers=", genes_str, "&species=9606&required_score=700")
+    ed <- tryCatch({ read.table(url, header = TRUE, sep = "\t", stringsAsFactors = FALSE) }, error = function(e) NULL)
+    if (!is.null(ed) && nrow(ed) > 0) sub_links_list[[length(sub_links_list) + 1]] <- ed
   }
-  
-  hub_comparison_df <- data.frame(
-    Symbol = V(g_initial)$name,
-    Degree = as.numeric(degree_scores),
-    Betweenness = as.numeric(betweenness_scores),
-    MCC = as.numeric(mcc_scores)
-  ) %>%
-    mutate(
-      Rank_Deg = min_rank(desc(Degree)),
-      Rank_Bet = min_rank(desc(Betweenness)),
-      Rank_MCC = min_rank(desc(MCC)),
-      Composite_Rank_Score = (Rank_Deg + Rank_Bet + Rank_MCC) / 3
-    ) %>%
-    left_join(gene_map_ppi, by = c("Symbol" = "SYMBOL")) %>%
-    left_join(gold_deps_df, by = c("UNIPROT" = "Clean_UNIPROT")) %>%
-    arrange(Composite_Rank_Score) %>%
-    dplyr::select(Symbol, UNIPROT, Composite_Rank_Score, Degree, MCC, Betweenness, Final_Status, meta_est)
-  
-  write.csv(hub_comparison_df, file.path(output_dir, "Table_4_Full_PPI_Algorithm_Comparison.csv"), row.names = FALSE)
-  
-  top_30_candidates <- hub_comparison_df %>%
-    filter(!str_detect(Symbol, blacklist_regex)) %>%
-    arrange(Composite_Rank_Score) %>%
-    slice_head(n = 30)
-  
-  sub_links_30 <- sub_links %>% filter(from %in% top_30_candidates$Symbol & to %in% top_30_candidates$Symbol)
-  g_sub <- graph_from_data_frame(sub_links_30, directed = FALSE, vertices = top_30_candidates)
-  g_sub <- induced_subgraph(g_sub, degree(g_sub) > 0)
-  
-  set.seed(42)
-  comm_res <- cluster_louvain(g_sub)
-  V(g_sub)$community_id <- as.character(membership(comm_res))
-  
-  # Community functional annotation via GO enrichment
-  community_labels <- c()
-  for (cid in unique(V(g_sub)$community_id)) {
-    genes_in_comm <- V(g_sub)$name[V(g_sub)$community_id == cid]
-    if (length(genes_in_comm) >= 2) {
-      g_entrez <- suppressMessages(suppressWarnings(bitr(genes_in_comm, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)$ENTREZID))
-      ego <- tryCatch({ suppressMessages(enrichGO(g_entrez, OrgDb = org.Hs.eg.db, ont = "BP", pvalueCutoff = 0.8)) }, error = function(e) NULL)
-      if (!is.null(ego) && nrow(as.data.frame(ego)) > 0) {
-        community_labels[cid] <- format_ontology_label(as.data.frame(ego)$Description[1], max_width = 18)
-      } else {
-        community_labels[cid] <- paste("Cluster", cid)
-      }
-    } else {
-      community_labels[cid] <- paste("Cluster", cid)
-    }
-  }
-  V(g_sub)$Module_Annotation <- community_labels[V(g_sub)$community_id]
-  
-  set.seed(88)
-  layout_raw <- layout_with_fr(g_sub, niter = 3500)
-  layout_df <- as.data.frame(layout_raw) %>% rename(x = 1, y = 2) %>% mutate(community = V(g_sub)$community_id)
-  cluster_centers <- layout_df %>% group_by(community) %>% summarise(cx = mean(x), cy = mean(y))
-  
-  layout_compact <- layout_df %>%
-    left_join(cluster_centers, by = "community") %>%
-    mutate(new_x = cx * 0.46 + (x - cx), new_y = cy * 0.46 + (y - cy)) %>%
-    dplyr::select(new_x, new_y) %>% as.matrix()
-  
-  p_fig1f <- ggraph(as_tbl_graph(g_sub), layout = layout_compact) +
-    geom_mark_hull(aes(x, y, group = Module_Annotation, fill = Module_Annotation, label = Module_Annotation),
-                   color = "grey55", linetype = "dashed", linewidth = 0.55,
-                   concavity = 1.0, expand = unit(3.0, "mm"), radius = unit(2.8, "mm"),
-                   alpha = 0.16, show.legend = FALSE, 
-                   label.fontsize = 9.5, label.fontface = "bold", label.fill = "white",
-                   label.buffer = unit(2.0, "mm"), con.type = "straight", con.colour = "grey50") +
-    scale_fill_brewer(palette = "Set2") + 
-    new_scale_fill() + 
-    geom_edge_link(color = "grey70", width = 0.75, alpha = 0.65) +
-    geom_node_point(aes(fill = meta_est, size = Degree), shape = 21, stroke = 1.15, color = "white") +
-    scale_fill_gradient2(low = "#313695", mid = "white", high = "#a50026", midpoint = 0, name = "Effect Size\n(Log2FC)") +
-    scale_size_continuous(range = c(5.2, 10.5), name = "PPI Degree", breaks = c(10, 15, 20, 25, 30, 35)) +
-    geom_node_text(aes(label = name), repel = TRUE, fontface = "bold", size = 3.8, bg.color = "white", bg.r = 0.12, color = "black") +
-    theme_graph() +
-    theme(legend.position = "right", plot.margin = ggplot2::margin(0.5, 0.5, 0.5, 0.5, "cm"))
-  
-  ggsave(file.path(output_dir, "Figure1F_PPI_Network.pdf"), p_fig1f, width = 8.5, height = 7.5, device = cairo_pdf)
+  edges_df <- bind_rows(sub_links_list)
+  sub_links <- edges_df %>% dplyr::select(from = preferredName_A, to = preferredName_B, score = score)
 }
+
+cat(sprintf("  - Successfully compiled %d high-confidence physical interaction pairs.\n", nrow(sub_links)))
+
+# Centrality Scores
+g_initial <- graph_from_data_frame(sub_links, directed = FALSE)
+g_initial <- igraph::simplify(g_initial, remove.multiple = TRUE, remove.loops = TRUE)
+
+degree_scores      <- degree(g_initial)
+betweenness_scores <- betweenness(g_initial, directed = FALSE, normalized = TRUE)
+
+mcc_scores <- setNames(numeric(vcount(g_initial)), V(g_initial)$name)
+clqs <- cliques(g_initial, min = 2, max = 5)
+for (clq in clqs) {
+  size <- length(clq)
+  mcc_scores[names(clq)] <- mcc_scores[names(clq)] + factorial(size - 1)
+}
+
+hub_comparison_df <- data.frame(
+  Symbol = V(g_initial)$name,
+  Degree = as.numeric(degree_scores),
+  Betweenness = as.numeric(betweenness_scores),
+  MCC = as.numeric(mcc_scores)
+) %>%
+  mutate(
+    Rank_Deg = min_rank(dplyr::desc(Degree)),
+    Rank_Bet = min_rank(dplyr::desc(Betweenness)),
+    Rank_MCC = min_rank(dplyr::desc(MCC)),
+    Composite_Rank_Score = (Rank_Deg + Rank_Bet + Rank_MCC) / 3
+  ) %>%
+  left_join(gene_map_ppi, by = c("Symbol" = "SYMBOL")) %>%
+  left_join(gold_deps_df %>% dplyr::select(Clean_UNIPROT, Final_Status, meta_est), by = c("UNIPROT" = "Clean_UNIPROT")) %>%
+  arrange(Composite_Rank_Score) %>%
+  dplyr::select(Symbol, UNIPROT, Composite_Rank_Score, Degree, MCC, Betweenness, Final_Status, meta_est)
+
+# Export Supplementary Table 10 (Full PPI Centralities)
+cat("Exporting Supplementary Table 10 (PPI Centralities and Louvain Communities)...\n")
+write.csv(hub_comparison_df, file.path(output_dir, "Supplementary_Table_10_Full_PPI_Centralities.csv"), row.names = FALSE)
+
+# Noise Filtering and Subgraph
+blacklist_regex <- "^RPS|^RPL|^MRPS|^MRPL|^EIF|^EEF|^KRT|^DSG|^DSP|^JUP|ALB|GAPDH|ACTB|ACTG|TUB[AB]|HSP90|UBC|APP"
+
+top_candidates <- hub_comparison_df %>%
+  filter(!str_detect(Symbol, blacklist_regex)) %>%
+  arrange(Composite_Rank_Score) %>%
+  slice_head(n = 30)
+
+sub_links_30 <- sub_links %>% filter(from %in% top_candidates$Symbol & to %in% top_candidates$Symbol)
+g_sub <- graph_from_data_frame(sub_links_30, directed = FALSE, vertices = top_candidates)
+g_sub <- induced_subgraph(g_sub, degree(g_sub) > 0)
+
+# Louvain Modularity
+set.seed(42)
+comm_res <- cluster_louvain(g_sub)
+V(g_sub)$community_id <- as.character(membership(comm_res))
+
+format_module_label <- function(term) {
+  t_clean <- term
+  t_clean <- gsub("regulation of protein modification by small protein conjugation or removal", "Protein Modification & Conjugation", t_clean, ignore.case = TRUE)
+  t_clean <- gsub(".*blood coagulation.*|.*hemostasis.*|.*fibrinolysis.*", "Hemostasis & Blood Coagulation", t_clean, ignore.case = TRUE)
+  t_clean <- gsub("aerobic electron transport chain", "Aerobic Electron Transport", t_clean, ignore.case = TRUE)
+  return(str_wrap(str_to_title(t_clean), width = 20))
+}
+
+community_labels <- c()
+for (cid in unique(V(g_sub)$community_id)) {
+  genes_in_comm <- V(g_sub)$name[V(g_sub)$community_id == cid]
+  if (length(genes_in_comm) >= 2) {
+    g_entrez <- suppressMessages(suppressWarnings(
+      bitr(genes_in_comm, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)$ENTREZID
+    ))
+    ego <- tryCatch({
+      suppressMessages(enrichGO(g_entrez, OrgDb = org.Hs.eg.db, ont = "BP", pvalueCutoff = 0.5, minGSSize = 2))
+    }, error = function(e) NULL)
+    
+    if (!is.null(ego) && nrow(as.data.frame(ego)) > 0) {
+      community_labels[cid] <- format_module_label(as.data.frame(ego)$Description[1])
+    } else {
+      community_labels[cid] <- paste("Module", cid)
+    }
+  } else {
+    community_labels[cid] <- paste("Module", cid)
+  }
+}
+V(g_sub)$Module_Annotation <- community_labels[V(g_sub)$community_id]
+V(g_sub)$Symbol <- V(g_sub)$name
+
+final_hub_table <- as_tibble(as_data_frame(g_sub, what = "vertices")) %>%
+  dplyr::select(Symbol = name, UNIPROT, Module_Annotation, Community = community_id, Composite_Rank_Score, Degree, meta_est)
+
+write.csv(final_hub_table, file.path(output_dir, "Supplementary_Table_10_Louvain_Hubs_30.csv"), row.names = FALSE)
+
+# Layout and Figure 1F
+set.seed(88)
+layout_raw <- layout_with_fr(g_sub, niter = 3500)
+layout_df  <- as.data.frame(layout_raw) %>% rename(x = 1, y = 2) %>% mutate(community = V(g_sub)$community_id)
+cluster_centers <- layout_df %>% group_by(community) %>% summarise(cx = mean(x), cy = mean(y))
+
+contraction_factor <- 0.46
+layout_compact <- layout_df %>%
+  left_join(cluster_centers, by = "community") %>%
+  mutate(
+    new_x = cx * contraction_factor + (x - cx),
+    new_y = cy * contraction_factor + (y - cy)
+  ) %>%
+  dplyr::select(new_x, new_y) %>% as.matrix()
+
+p_fig1f <- ggraph(as_tbl_graph(g_sub), layout = layout_compact) +
+  geom_mark_hull(aes(x, y, group = Module_Annotation, fill = Module_Annotation, label = Module_Annotation),
+                 color = "grey55", linetype = "dashed", linewidth = 0.55,
+                 concavity = 1.0, expand = unit(3.0, "mm"), radius = unit(2.8, "mm"),
+                 alpha = 0.16, show.legend = FALSE, 
+                 label.fontsize = 9.5, label.fontface = "bold", label.fill = "white",
+                 label.buffer = unit(2.0, "mm"), con.type = "straight", con.colour = "grey50") +
+  scale_fill_brewer(palette = "Set2") + 
+  new_scale_fill() + 
+  geom_edge_link(color = "grey70", width = 0.75, alpha = 0.65) +
+  geom_node_point(aes(fill = meta_est, size = Degree), shape = 21, stroke = 1.15, color = "white") +
+  scale_fill_gradient2(low = "#313695", mid = "white", high = "#a50026", 
+                       midpoint = 0, name = "Effect Size\n(Log2FC)",
+                       breaks = c(-1, -0.5, 0, 0.5, 1)) +
+  scale_size_continuous(range = c(5.2, 10.5), name = "PPI Degree") +
+  geom_node_text(aes(label = name), repel = TRUE, fontface = "bold", size = 3.8, bg.color = "white", bg.r = 0.12, color = "black") +
+  theme_graph() +
+  theme(
+    legend.position = "right",
+    legend.title = element_text(face = "bold", size = 10.5),
+    legend.text = element_text(size = 9),
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    plot.subtitle = element_text(face = "italic", size = 10, hjust = 0.5, color = "grey30"),
+    plot.margin = ggplot2::margin(0.5, 0.5, 0.5, 0.5, "cm")
+  ) +
+  labs(title = "Figure 1F: Data-Driven Pathological PPI Hub Network",
+       subtitle = sprintf("Unsupervised Topological Modules & Automated GO BP Annotation (%d Meta DEPs)", nrow(gold_deps_df)))
+
+ggsave(file.path(output_dir, "Figure1F_PPI_Network.pdf"), p_fig1f, width = 9.5, height = 7.8, device = pdf_device)
+ggsave(file.path(output_dir, "Figure1F_PPI_Network.png"), p_fig1f, width = 9.5, height = 7.8, dpi = 300)
+
+cat("Step 5 complete: Figure 1F exported in exact publication format.\n")
 
 # ==============================================================================
 # Step 6: Generate Figure 1G (ssGSEA Module Burden Scores)
@@ -574,7 +749,8 @@ cov_adjusted_results <- map_df(names(dep_module_genes), function(mod) {
   data.frame(Module = mod, Raw_Wilcox_P = wilcox_p, Adjusted_LM_Beta = tidy_res$estimate, Adjusted_LM_P = tidy_res$p.value)
 }) %>% mutate(Adjusted_LM_FDR = p.adjust(Adjusted_LM_P, method = "BH"))
 
-write.csv(cov_adjusted_results, file.path(output_dir, "Table_6_ssGSEA_Covariate_Adjusted_Results.csv"), row.names = FALSE)
+cat("  - 6-Covariate Adjusted Linear Regression Validation (Result 2 In-text Verification):\n")
+print(cov_adjusted_results)
 
 p_fig1g <- ggplot(score_df, aes(x = group, y = Burden_Score, fill = group)) +
   geom_violin(trim = FALSE, alpha = 0.65, color = NA, scale = "width", width = 0.85) +
@@ -595,7 +771,7 @@ p_fig1g <- ggplot(score_df, aes(x = group, y = Burden_Score, fill = group)) +
     panel.spacing = unit(0.6, "lines")
   )
 
-ggsave(file.path(output_dir, "Figure1G_Pathway_Activity.pdf"), p_fig1g, width = 14, height = 4.2, device = cairo_pdf)
+ggsave(file.path(output_dir, "Figure1G_Pathway_Activity.pdf"), p_fig1g, width = 14, height = 4.2, device = pdf_device)
 ggsave(file.path(output_dir, "Figure1G_Pathway_Activity.png"), p_fig1g, width = 14, height = 4.2, dpi = 300)
 
-cat("Phase 2 analysis complete. Figure 1 panels and tables saved to:", output_dir, "\n")
+cat("Phase 2 analysis complete. Output files restricted strictly to Figure 1 panels and ST4, ST5, ST9, ST10 in:", output_dir, "\n")

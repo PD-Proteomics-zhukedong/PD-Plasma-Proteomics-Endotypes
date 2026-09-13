@@ -1,7 +1,9 @@
 # ==============================================================================
-# Script: 07_consensus_clustering_and_endotype_mapping.R
-# Purpose: Covariate residualization, molecular consensus clustering, and Figure 3 / Supp Fig 5
-# Project: Large-scale plasma proteomics identifies molecularly distinct PD endotypes
+# Script: 06_consensus_clustering_and_endotype_mapping.R
+# Project: Large-scale plasma proteomics in Parkinson's disease (Nature Aging)
+# Purpose: 8-Covariate residualization, PAM molecular consensus clustering (K=3),
+#          scale-driven clinical clustering (K=3), cross-modal Sankey mapping,
+#          Figure 3, Supp Fig 4, and ST13–ST15 generation
 # ==============================================================================
 
 options(expressions = 5000)
@@ -23,10 +25,13 @@ suppressPackageStartupMessages({
   library(scales)
 })
 
+# Cross-platform PDF device fallback
+pdf_device <- if (capabilities("cairo")) cairo_pdf else "pdf"
+
 # Directory setup
 data_dir      <- "data"
 input_dea_dir <- "results/02_figure1_meta_dea"
-output_dir    <- "results/07_figure3_molecular_endotypes"
+output_dir    <- "results/06_figure3_molecular_endotypes"
 if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
 
 find_file_smart <- function(pattern, default_path) {
@@ -36,6 +41,11 @@ find_file_smart <- function(pattern, default_path) {
   return(default_path)
 }
 
+find_col_smart <- function(df, pattern) {
+  cols <- grep(pattern, colnames(df), ignore.case = TRUE, value = TRUE)
+  if (length(cols) > 0) return(cols[1]) else return(NA_character_)
+}
+
 get_mode <- function(x) {
   x <- na.omit(x)
   if (length(x) == 0) return(NA)
@@ -43,39 +53,100 @@ get_mode <- function(x) {
   uniqv[which.max(tabulate(match(x, uniqv)))]
 }
 
-cat("=== Phase 7: Molecular Endotyping, Cross-Modal Mapping and Figure 3 ===\n")
-
-# ==============================================================================
-# Step 1: Ingestion & 8-Covariate Residualization on Meta-DEPs (n = 669 PD)
-# ==============================================================================
-cat("Loading matrices and performing 8-covariate residualization on Meta-DEPs...\n")
-
-clin_file <- file.path(data_dir, "metadata_clinical_n1119.csv")
-bg_file   <- file.path("results/01_preprocessed_data", "3_ComBat_Corrected_Matrix.tsv")
-meta_file <- file.path(input_dea_dir, "Table_ST10_Final_823_Strict_Meta_DEPs.csv")
-
-if (!file.exists(clin_file) || !file.exists(bg_file) || !file.exists(meta_file)) {
-  stop("Required input files not found. Please run previous pipeline scripts first.")
+clean_num <- function(x) {
+  if (is.null(x) || all(is.na(x))) return(NA_real_)
+  as.numeric(gsub("[^0-9.-]", "", as.character(x)))
 }
 
-clinical_raw <- read.csv(clin_file, stringsAsFactors = FALSE)
+cat("\n=== Phase 6: Molecular Endotyping, Cross-Modal Mapping, and Figure 3 ===\n")
+
+# ==============================================================================
+# Step 1: Ingestion & 8-Covariate Residualization
+# ==============================================================================
+cat("Loading clinical metadata and proteomic matrices...\n")
+
+clin_file <- find_file_smart("Proteom-clin-final.*\\.xlsx?|metadata_clinical.*\\.xlsx?|metadata_clinical.*\\.csv$", 
+                             file.path(data_dir, "metadata_clinical.csv"))
+bg_file   <- file.path("results/01_preprocessed_data", "3_ComBat_Corrected_Matrix.tsv")
+
+meta_st5_file <- file.path(input_dea_dir, "Supplementary_Table_5_Strict_MetaDEPs.csv")
+meta_leg_file <- file.path(input_dea_dir, "Table_3_Final_Strict_DEPs_StoufferMeta.csv")
+meta_file     <- if (file.exists(meta_st5_file)) meta_st5_file else meta_leg_file
+
+if (!file.exists(clin_file) || !file.exists(bg_file) || !file.exists(meta_file)) {
+  stop("Required input files not found. Please verify paths in data/ and results/.")
+}
+
+clinical_raw <- if (grepl("\\.xlsx?$", clin_file)) readxl::read_excel(clin_file) else read.csv(clin_file, stringsAsFactors = FALSE)
 colnames(clinical_raw) <- make.names(colnames(clinical_raw))
 
-# Filter sporadic PD cohort with complete clinical baseline
-clinical_pd <- clinical_raw %>%
-  filter(group == "PD" & !is.na(Age) & !is.na(Sex)) %>%
+ledd_c  <- find_col_smart(clinical_raw, "^ledd$|levodopa")
+dur_c   <- find_col_smart(clinical_raw, "^duration$|disease.*dur")
+nmss_c  <- find_col_smart(clinical_raw, "^NMSS")
+hama_c  <- find_col_smart(clinical_raw, "^HAMA")
+hamd_c  <- find_col_smart(clinical_raw, "^HAMD")
+pdss_c  <- find_col_smart(clinical_raw, "^PDSS")
+upsit_c <- find_col_smart(clinical_raw, "^UPSIT")
+mmse_c  <- find_col_smart(clinical_raw, "^MMSE")
+moca_c  <- find_col_smart(clinical_raw, "^MoCA")
+upd3_c  <- find_col_smart(clinical_raw, "^UPDRS3|^UPDRS.*3")
+
+clinical_raw$raw_ledd     <- if (!is.na(ledd_c)) clean_num(clinical_raw[[ledd_c]]) else NA_real_
+clinical_raw$raw_duration <- if (!is.na(dur_c)) clean_num(clinical_raw[[dur_c]]) else NA_real_
+clinical_raw$NMSS_Total   <- if (!is.na(nmss_c)) clean_num(clinical_raw[[nmss_c]]) else NA_real_
+clinical_raw$HAMA         <- if (!is.na(hama_c)) clean_num(clinical_raw[[hama_c]]) else NA_real_
+clinical_raw$HAMD         <- if (!is.na(hamd_c)) clean_num(clinical_raw[[hamd_c]]) else NA_real_
+clinical_raw$PDSS         <- if (!is.na(pdss_c)) clean_num(clinical_raw[[pdss_c]]) else NA_real_
+clinical_raw$UPSIT        <- if (!is.na(upsit_c)) clean_num(clinical_raw[[upsit_c]]) else NA_real_
+clinical_raw$MMSE         <- if (!is.na(mmse_c)) clean_num(clinical_raw[[mmse_c]]) else NA_real_
+clinical_raw$MoCA         <- if (!is.na(moca_c)) clean_num(clinical_raw[[moca_c]]) else NA_real_
+clinical_raw$UPDRS3       <- if (!is.na(upd3_c)) clean_num(clinical_raw[[upd3_c]]) else NA_real_
+
+if (!"hospital" %in% colnames(clinical_raw)) {
+  if ("cohort" %in% colnames(clinical_raw)) {
+    clinical_raw$hospital <- ifelse(clinical_raw$cohort == "Discovery", "Xiangya", "Renmin")
+  } else if ("center" %in% colnames(clinical_raw)) {
+    clinical_raw$hospital <- ifelse(clinical_raw$center %in% c("Discovery", "Center_1", "Center1"), "Xiangya", "Renmin")
+  }
+}
+
+cv_col_name <- find_col_smart(clinical_raw, "Metabolic.*cardio|CV.*Met|comorbid")
+
+clinical_clean <- clinical_raw %>%
+  mutate(group = ifelse(group %in% c("CTR", "Control", "HC"), "HC", "PD")) %>%
+  group_by(hospital) %>% 
   mutate(
-    LEDD = replace_na(as.numeric(LEDD), 0),
-    Duration = replace_na(as.numeric(Disease_Duration), 0),
-    CV_Metabolic_Cat = as.numeric(as.factor(CV_Metabolic_Score)),
-    hepatic_disease = replace_na(as.numeric(hepatic_disease), 0),
-    kidney.function = replace_na(as.numeric(kidney.function), 0)
+    age = as.numeric(ifelse(is.na(age), median(age, na.rm = TRUE), age)),
+    BMI = as.numeric(ifelse(is.na(BMI), median(BMI, na.rm = TRUE), BMI)),
+    sex = ifelse(sex %in% c("male", "M", "1", 1), 1, 0),
+    hepatic_disease = as.numeric(as.character(ifelse(is.na(hepatic_disease), get_mode(hepatic_disease), hepatic_disease))),
+    kidney.function = as.numeric(as.character(ifelse(is.na(kidney.function), get_mode(kidney.function), kidney.function))),
+    LEDD = as.numeric(ifelse(is.na(raw_ledd), median(raw_ledd, na.rm = TRUE), raw_ledd)),
+    Duration = as.numeric(ifelse(is.na(raw_duration), median(raw_duration, na.rm = TRUE), raw_duration))
+  ) %>%
+  ungroup() %>%
+  mutate(
+    CV_Metabolic_Score = case_when(
+      is.na(.data[[cv_col_name]]) ~ as.character(get_mode(.data[[cv_col_name]])),
+      as.numeric(.data[[cv_col_name]]) >= 2 ~ "2+",
+      TRUE ~ as.character(.data[[cv_col_name]])
+    ),
+    CV_Metabolic_Cat = as.numeric(factor(CV_Metabolic_Score, levels = c("0", "1", "2+"))),
+    Age = as.numeric(age), Sex = as.numeric(sex),
+    Hospital = as.factor(hospital),
+    LEDD = replace_na(LEDD, 0), Duration = replace_na(Duration, 0)
   )
 
+clinical_pd <- clinical_clean %>% 
+  filter(group == "PD" & !is.na(Age) & !is.na(Sex))
+
 meta_deps <- read.csv(meta_file, stringsAsFactors = FALSE)
-strict_deps_823 <- meta_deps %>%
-  filter(Final_Status %in% c("Strictly Validated Up", "Strictly Validated Down")) %>%
-  pull(protein)
+col_stat  <- if ("Consensus_Regulation" %in% colnames(meta_deps)) "Consensus_Regulation" else "Final_Status"
+col_prot  <- if ("Protein_Group" %in% colnames(meta_deps)) "Protein_Group" else "protein"
+
+strict_deps_823 <- meta_deps %>% 
+  filter(grepl("Strictly Validated", .data[[col_stat]])) %>% 
+  pull(.data[[col_prot]])
 
 prot_raw_full <- fread(bg_file, data.table = FALSE)
 rownames(prot_raw_full) <- make.unique(as.character(prot_raw_full$Protein.Group))
@@ -87,7 +158,9 @@ common_samples <- intersect(colnames(prot_expr_mat), clinical_pd$sample)
 prot_pd_mat    <- prot_expr_mat[common_prots, common_samples]
 clinical_final <- clinical_pd[match(common_samples, clinical_pd$sample), ]
 
-# Fit linear models across 8 covariates to extract residuals
+cat(sprintf("Performing 8-covariate residualization across %d Meta-DEPs and %d sporadic PD patients...\n", 
+            nrow(prot_pd_mat), ncol(prot_pd_mat)))
+
 prot_residuals_mat <- matrix(NA_real_, nrow = nrow(prot_pd_mat), ncol = ncol(prot_pd_mat),
                              dimnames = dimnames(prot_pd_mat))
 
@@ -107,19 +180,17 @@ for (i in 1:nrow(prot_pd_mat)) {
   prot_residuals_mat[i, ] <- residuals(fit)
 }
 
-cat(sprintf("Residualized %d Meta-DEPs across %d sporadic PD patients.\n", 
-            nrow(prot_residuals_mat), ncol(prot_residuals_mat)))
-
 # ==============================================================================
 # Step 2: Unsupervised Consensus Clustering on Molecular Residuals (K = 3)
 # ==============================================================================
-cat("Running consensus clustering on molecular residuals (k = 2 to 6)...\n")
+cat("Running ConsensusClusterPlus on residualized proteome (K = 3)...\n")
 
 cc_dir <- file.path(output_dir, "ConsensusCluster_Molecular")
-if (!dir.exists(cc_dir)) dir.create(cc_dir)
+if (!dir.exists(cc_dir)) dir.create(cc_dir, recursive = TRUE)
 
+set.seed(42)
 cc_res <- ConsensusClusterPlus(
-  prot_residuals_mat, maxK = 6, reps = 1000, pItem = 0.8, pFeature = 1.0,
+  prot_residuals_mat, maxK = 6, reps = 1000, pItem = 0.8, pFeature = 1,
   title = cc_dir, clusterAlg = "pam", distance = "euclidean",
   seed = 42, plot = "pdf"
 )
@@ -129,16 +200,18 @@ cluster_labels <- cc_res[[best_k]]$consensusClass
 
 clinical_ready <- clinical_final %>%
   mutate(Subtype = factor(paste0("Subtype_", cluster_labels[sample]), 
-                          levels = c("Subtype_1", "Subtype_2", "Subtype_3"),
-                          labels = c("Subtype1", "Subtype2", "Subtype3")))
+                          levels = paste0("Subtype_", 1:best_k)))
 
-# Generate Supplementary Figure 5A (Molecular Delta Area Plot)
+cat("\n--- Empirical Population Distribution of Molecular Endotypes ---\n")
+print(table(clinical_ready$Subtype))
+
+# Supplementary Figure 4A (Molecular Delta Area Plot)
 delta_k_mol <- data.frame(
   k = 2:6,
-  delta_area = c(0.49, 0.27, 0.13, 0.11, 0.05) # Extracted from consensus CDF empirical area change
+  delta_area = c(0.49, 0.27, 0.13, 0.11, 0.05)
 )
 
-p_supp5a <- ggplot(delta_k_mol, aes(x = k, y = delta_area)) +
+p_supp4a <- ggplot(delta_k_mol, aes(x = k, y = delta_area)) +
   geom_line(linewidth = 0.8) +
   geom_point(shape = 21, fill = "white", color = "black", size = 2.8, stroke = 1.0) +
   scale_x_continuous(breaks = 2:6) +
@@ -148,49 +221,72 @@ p_supp5a <- ggplot(delta_k_mol, aes(x = k, y = delta_area)) +
   theme(plot.title = element_text(hjust = 0.5, face = "plain", size = 11),
         plot.subtitle = element_text(hjust = 0.5, face = "plain", size = 10.5))
 
-# Export Supplementary Table ST7
-table_st7_baseline <- clinical_ready %>%
+# Export Supplementary Table 13
+hy_col <- find_col_smart(clinical_ready, "^hy.*stage|^hy$|hoehn")
+clinical_ready$HY_Val <- if (!is.na(hy_col)) clean_num(clinical_ready[[hy_col]]) else NA_real_
+
+table_st13_baseline <- clinical_ready %>%
   group_by(Subtype) %>%
   summarise(
     N = n(),
+    Proportion = sprintf("%.1f%%", n() / nrow(clinical_ready) * 100),
     Age_Mean_SD = sprintf("%.1f (%.1f)", mean(Age, na.rm = TRUE), sd(Age, na.rm = TRUE)),
     Male_Count_Pct = sprintf("%d (%.1f%%)", sum(Sex == 1), sum(Sex == 1)/n()*100),
     Duration_Median_IQR = sprintf("%.1f [%.1f, %.1f]", median(Duration), quantile(Duration, 0.25), quantile(Duration, 0.75)),
+    Drug_Naive_Count_Pct = sprintf("%d (%.1f%%)", sum(LEDD == 0), sum(LEDD == 0)/n()*100),
     LEDD_Median_IQR = sprintf("%.1f [%.1f, %.1f]", median(LEDD), quantile(LEDD, 0.25), quantile(LEDD, 0.75)),
-    HY_Median_IQR = sprintf("%.1f [%.1f, %.1f]", median(HY_Stage, na.rm = TRUE), quantile(HY_Stage, 0.25, na.rm = TRUE), quantile(HY_Stage, 0.75, na.rm = TRUE)),
+    HY_Median_IQR = sprintf("%.1f [%.1f, %.1f]", median(HY_Val, na.rm = TRUE), 
+                            quantile(HY_Val, 0.25, na.rm = TRUE), 
+                            quantile(HY_Val, 0.75, na.rm = TRUE)),
     .groups = "drop"
   )
-write.csv(table_st7_baseline, file.path(output_dir, "Supplementary_Table_7_Molecular_Endotypes_Baseline.csv"), row.names = FALSE)
+
+write.csv(table_st13_baseline, file.path(output_dir, "Supplementary_Table_13_Molecular_Endotypes_Baseline.csv"), row.names = FALSE)
+cat("\nSupplementary Table 13 exported:\n")
+print(as.data.frame(table_st13_baseline))
 
 # ==============================================================================
 # Step 3: Unsupervised Consensus Clustering on Clinical Scales (Phenotypes 1-3)
 # ==============================================================================
-cat("Running consensus clustering on clinical scales (k = 2 to 6)...\n")
+cat("\nRunning consensus clustering on standardized clinical scales (K = 3)...\n")
 
-clin_traits_candidate <- c("UPDRS_III", "NMSS", "MMSE", "MoCA", "HAMA", "HAMD", "PDSS", "UPSIT")
+clin_traits_candidate <- c("UPDRS3", "NMSS_Total", "MMSE", "MoCA", "HAMA", "HAMD", "PDSS", "UPSIT")
 actual_clin_traits    <- intersect(clin_traits_candidate, colnames(clinical_ready))
 
+# Extraction and numeric cleaning
 clin_sub <- clinical_ready %>%
   dplyr::select(sample, Molecular_Subtype = Subtype, all_of(actual_clin_traits)) %>%
-  mutate(across(all_of(actual_clin_traits), ~as.numeric(gsub("[^0-9.-]", "", as.character(.)))))
+  mutate(across(all_of(actual_clin_traits), clean_num))
 
+# Soft filtering: retain patients with >= 50% scale completeness
+missing_ratio <- rowSums(is.na(clin_sub[, actual_clin_traits])) / length(actual_clin_traits)
+clin_cluster_df <- clin_sub[missing_ratio <= 0.5, ]
+
+# Local median imputation on eligible cohort
 for (tr in actual_clin_traits) {
-  if (any(is.na(clin_sub[[tr]]))) {
-    clin_sub[[tr]][is.na(clin_sub[[tr]])] <- median(clin_sub[[tr]], na.rm = TRUE)
+  if (any(is.na(clin_cluster_df[[tr]]))) {
+    med_val <- median(clin_cluster_df[[tr]], na.rm = TRUE)
+    clin_cluster_df[[tr]][is.na(clin_cluster_df[[tr]])] <- med_val
   }
 }
 
-clin_mat_scaled <- clin_sub %>%
+cat(sprintf("Eligible participants for clinical clustering: N = %d\n", nrow(clin_cluster_df)))
+
+# Z-score standardization across clinical scales
+clin_mat_scaled <- clin_cluster_df %>%
   dplyr::select(all_of(actual_clin_traits)) %>%
   mutate(across(everything(), scale)) %>%
   as.matrix()
-rownames(clin_mat_scaled) <- clin_sub$sample
+rownames(clin_mat_scaled) <- clin_cluster_df$sample
 
 cc_clin_dir <- file.path(output_dir, "ConsensusCluster_Clinical")
-if (!dir.exists(cc_clin_dir)) dir.create(cc_clin_dir)
+if (!dir.exists(cc_clin_dir)) dir.create(cc_clin_dir, recursive = TRUE)
 
+safe_maxK <- min(6, max(3, floor(nrow(clin_cluster_df) / 5)))
+
+set.seed(42)
 results_clin <- ConsensusClusterPlus(
-  t(clin_mat_scaled), maxK = 6, reps = 1000, pItem = 0.8, pFeature = 1.0,
+  t(clin_mat_scaled), maxK = safe_maxK, reps = 1000, pItem = 0.8, pFeature = 1,
   title = cc_clin_dir, clusterAlg = "pam", distance = "euclidean",
   seed = 42, plot = "pdf"
 )
@@ -198,17 +294,20 @@ results_clin <- ConsensusClusterPlus(
 best_k_clin <- 3
 clin_cluster_labels <- results_clin[[best_k_clin]]$consensusClass
 
-clin_cluster_df <- clin_sub %>%
-  mutate(Clinical_Phenotype = factor(paste0("Phenotype", clin_cluster_labels[sample]), 
-                                     levels = c("Phenotype1", "Phenotype2", "Phenotype3")))
+clin_cluster_df <- clin_cluster_df %>%
+  mutate(Clinical_Phenotype = factor(paste0("Phenotype_", clin_cluster_labels[sample]), 
+                                     levels = paste0("Phenotype_", 1:best_k_clin)))
 
-# Generate Supplementary Figure 5B (Clinical Delta Area Plot)
+cat("\n--- Empirical Population Distribution of Clinical Phenotypes ---\n")
+print(table(clin_cluster_df$Clinical_Phenotype))
+
+# Supplementary Figure 4B (Clinical Delta Area Plot)
 delta_k_clin <- data.frame(
   k = 2:6,
   delta_area = c(0.46, 0.35, 0.16, 0.05, 0.05)
 )
 
-p_supp5b <- ggplot(delta_k_clin, aes(x = k, y = delta_area)) +
+p_supp4b <- ggplot(delta_k_clin, aes(x = k, y = delta_area)) +
   geom_line(linewidth = 0.8) +
   geom_point(shape = 21, fill = "white", color = "black", size = 2.8, stroke = 1.0) +
   scale_x_continuous(breaks = 2:6) +
@@ -218,8 +317,8 @@ p_supp5b <- ggplot(delta_k_clin, aes(x = k, y = delta_area)) +
   theme(plot.title = element_text(hjust = 0.5, face = "plain", size = 11),
         plot.subtitle = element_text(hjust = 0.5, face = "plain", size = 10.5))
 
-# Export Supplementary Table ST8
-table_st8_baseline <- clin_cluster_df %>%
+# Export Supplementary Table 14
+table_st14_baseline <- clin_cluster_df %>%
   inner_join(clinical_ready %>% dplyr::select(sample, Age, Sex, Duration, LEDD), by = "sample") %>%
   group_by(Clinical_Phenotype) %>%
   summarise(
@@ -230,12 +329,13 @@ table_st8_baseline <- clin_cluster_df %>%
     LEDD_Median_IQR = sprintf("%.1f [%.1f, %.1f]", median(LEDD), quantile(LEDD, 0.25), quantile(LEDD, 0.75)),
     .groups = "drop"
   )
-write.csv(table_st8_baseline, file.path(output_dir, "Supplementary_Table_8_Clinical_Phenotypes_Baseline.csv"), row.names = FALSE)
+write.csv(table_st14_baseline, file.path(output_dir, "Supplementary_Table_14_Clinical_Phenotypes_Baseline.csv"), row.names = FALSE)
+cat("Supplementary Table 14 exported.\n")
 
 # ==============================================================================
-# Step 4: Generate Figure 3A (PCA Score Plot of Molecular Endotypes)
+# Step 4: Figure 3A (PCA Score Plot of Residualized Molecular Space)
 # ==============================================================================
-cat("Generating Figure 3A (PCA score plot)...\n")
+cat("Generating Figure 3A (PCA of molecular endotypes)...\n")
 
 pca_res <- prcomp(t(prot_residuals_mat), center = TRUE, scale. = TRUE)
 pca_df  <- as.data.frame(pca_res$x[, 1:2]) %>%
@@ -245,7 +345,7 @@ pca_df  <- as.data.frame(pca_res$x[, 1:2]) %>%
 pc1_var <- round(summary(pca_res)$importance[2, 1] * 100, 1)
 pc2_var <- round(summary(pca_res)$importance[2, 2] * 100, 1)
 
-subtype_colors <- c("Subtype1" = "#d73027", "Subtype2" = "#4575b4", "Subtype3" = "#fdae61")
+subtype_colors <- c("Subtype_1" = "#d73027", "Subtype_2" = "#4575b4", "Subtype_3" = "#fdae61")
 
 p_fig3a <- ggplot(pca_df, aes(x = PC1, y = PC2, color = Subtype, fill = Subtype)) +
   stat_ellipse(geom = "polygon", alpha = 0.12, type = "norm", linetype = 2, linewidth = 0.6) +
@@ -262,11 +362,17 @@ p_fig3a <- ggplot(pca_df, aes(x = PC1, y = PC2, color = Subtype, fill = Subtype)
         panel.grid.minor = element_blank())
 
 # ==============================================================================
-# Step 5: Generate Figure 3B (GTEx 15 Organ-Specific Signatures Bubble Plot)
+# Step 5: Figure 3B (GTEx 15 Organ-Specific Signatures Bubble Plot)
 # ==============================================================================
-cat("Generating Figure 3B (GTEx 15 organ signatures bubble plot)...\n")
+cat("Generating Figure 3B (GTEx 15 organ-specific bubble plot)...\n")
 
-gtex_file <- find_file_smart("GTEx_Analysis_.*_gene_median_tpm.gct.gz", file.path(data_dir, "GTEx_Analysis_2017-06-05_v8_RNASeQCv1.1.9_gene_median_tpm.gct.gz"))
+gtex_file <- find_file_smart("GTEx_Analysis_.*_gene_median_tpm.gct.*", 
+                             file.path(data_dir, "GTEx_Analysis_2017-06-05_v8_RNASeQCv1.1.9_gene_median_tpm.gct.gz"))
+
+if (!file.exists(gtex_file)) {
+  stop("GTEx median TPM matrix not found in data/ directory.")
+}
+
 gtex_raw  <- fread(gtex_file, skip = 2, data.table = FALSE)
 colnames(gtex_raw)[1:2] <- c("Name", "Description")
 gtex_clean <- gtex_raw %>% distinct(Description, .keep_all = TRUE)
@@ -280,7 +386,6 @@ gtex_15tissues <- c(
   "Artery - Aorta", "Whole Blood", "Spleen", "Liver", "Kidney - Cortex", "Skin - Sun Exposed (Lower leg)"
 )
 
-# Extract full proteome and convert to gene symbols
 clean_uniprot_ids <- gsub("-.*|\\..*", "", sapply(strsplit(rownames(prot_expr_mat), ";"), `[`, 1))
 prot_symbol_map   <- suppressMessages(suppressWarnings(
   bitr(clean_uniprot_ids, fromType = "UNIPROT", toType = "SYMBOL", OrgDb = org.Hs.eg.db)
@@ -307,7 +412,7 @@ for (t in gtex_15tissues) {
       clean_name <- gsub("Brain - ", "Brain: ", t)
       clean_name <- gsub("Artery - ", "Artery: ", clean_name)
       clean_name <- gsub("Heart - Left Ventricle", "Heart: Left Ventricle", clean_name)
-      clean_name <- gsub("Skin - Sun Exposed.*", "Skin: Sun Exposed", clean_name)
+      clean_name <- gsub("Skin - Sun Exposed.*", "Skin: Sun Exposed (Lower leg)", clean_name)
       clean_name <- gsub(" (basal ganglia)", "", clean_name, fixed = TRUE)
       clean_name <- gsub(" (cervical c-1)", "", clean_name, fixed = TRUE)
       clean_name <- gsub(" (BA9)", "", clean_name, fixed = TRUE)
@@ -319,7 +424,6 @@ for (t in gtex_15tissues) {
 param_organ <- ssgseaParam(exprData = prot_full_sym, geneSets = gtex_gene_sets, minSize = 2)
 gsva_organ_raw <- gsva(param_organ)
 
-# Residualize organ scores across 8 covariates
 gsva_organ_df <- as.data.frame(t(gsva_organ_raw)) %>%
   rownames_to_column("sample") %>%
   inner_join(clinical_final %>% dplyr::select(sample, Age, Sex, BMI, hepatic_disease, kidney.function, CV_Metabolic_Cat, LEDD, Duration), by = "sample")
@@ -333,7 +437,6 @@ gsva_organ_res <- gsva_organ_df %>%
   inner_join(clinical_ready %>% dplyr::select(sample, Subtype), by = "sample") %>%
   pivot_longer(cols = -c(sample, Subtype), names_to = "Organ", values_to = "Residual_Score")
 
-# Dynamic single-sample t-test per organ and subtype
 organ_bubble_stats <- gsva_organ_res %>%
   group_by(Organ, Subtype) %>%
   summarise(
@@ -349,8 +452,8 @@ organ_bubble_stats <- gsva_organ_res %>%
 organ_display_order <- c(
   "Brain: Substantia nigra", "Brain: Putamen", "Brain: Caudate",
   "Brain: Nucleus accumbens", "Brain: Frontal Cortex", "Brain: Cortex",
-  "Spinal cord", "Muscle - Skeletal", "Heart: Left Ventricle",
-  "Artery: Aorta", "Whole Blood", "Spleen", "Liver", "Kidney - Cortex", "Skin: Sun Exposed"
+  "Brain: Spinal cord", "Muscle - Skeletal", "Heart: Left Ventricle",
+  "Artery: Aorta", "Whole Blood", "Spleen", "Liver", "Kidney - Cortex", "Skin: Sun Exposed (Lower leg)"
 )
 
 organ_bubble_stats$Organ <- factor(organ_bubble_stats$Organ, levels = rev(intersect(organ_display_order, unique(organ_bubble_stats$Organ))))
@@ -371,23 +474,22 @@ p_fig3b <- ggplot(organ_bubble_stats, aes(x = Subtype, y = Organ)) +
         legend.position = "right")
 
 # ==============================================================================
-# Step 6: Generate Figure 3C (Sankey Alluvial Diagram: S1-S3 -> P1-P3)
+# Step 6: Figure 3C (Sankey Alluvial Diagram: S1-S3 -> Phenotype 1-3)
 # ==============================================================================
-cat("Generating Figure 3C (Sankey alluvial diagram)...\n")
+cat("Generating Figure 3C (Cross-modal Sankey alluvial diagram)...\n")
 
 sankey_data <- clin_cluster_df %>%
   mutate(
-    S_Label = case_when(Molecular_Subtype == "Subtype1" ~ "S1",
-                        Molecular_Subtype == "Subtype2" ~ "S2",
+    S_Label = case_when(Molecular_Subtype == "Subtype_1" ~ "S1",
+                        Molecular_Subtype == "Subtype_2" ~ "S2",
                         TRUE ~ "S3"),
-    P_Label = case_when(Clinical_Phenotype == "Phenotype1" ~ "P1",
-                        Clinical_Phenotype == "Phenotype2" ~ "P2",
+    P_Label = case_when(Clinical_Phenotype == "Phenotype_1" ~ "P1",
+                        Clinical_Phenotype == "Phenotype_2" ~ "P2",
                         TRUE ~ "P3")
   ) %>%
   group_by(S_Label, P_Label) %>%
   summarise(Patient_Count = n(), .groups = "drop")
 
-# Dynamically calculate Adjusted Rand Index & Chi-square p-value
 ari_val     <- adjustedRandIndex(clin_cluster_df$Molecular_Subtype, clin_cluster_df$Clinical_Phenotype)
 chisq_p_val <- chisq.test(table(clin_cluster_df$Molecular_Subtype, clin_cluster_df$Clinical_Phenotype))$p.value
 
@@ -407,13 +509,13 @@ p_fig3c <- ggplot(sankey_data, aes(y = Patient_Count, axis1 = S_Label, axis2 = P
         axis.text.x = element_text(face = "bold", size = 10))
 
 # ==============================================================================
-# Step 7: Generate Figure 3D-I (Dual-Model ANCOVA & Clinical Scale Violins)
+# Step 7: Figure 3D-I (Dual-Model ANCOVA & Clinical Scales) and Table ST15
 # ==============================================================================
-cat("Calculating dual-model ANCOVA and generating Figure 3D-I (Clinical Scales)...\n")
+cat("Calculating dual-model ANCOVA and generating Figure 3D-I...\n")
 
 target_scales_fig3 <- c(
-  "UPDRS_III"  = "UPDRS-III(Motor)",
-  "NMSS"       = "NMSS(Non-motor)",
+  "UPDRS3"     = "UPDRS-III (Motor)",
+  "NMSS_Total" = "NMSS (Total Non-motor)",
   "HAMD"       = "HAMD (Depression)",
   "UPSIT"      = "UPSIT (Olfaction)",
   "MMSE"       = "MMSE (Cognition)",
@@ -421,12 +523,12 @@ target_scales_fig3 <- c(
 )
 
 ancova_table_list <- list()
-pairwise_tukey_list <- list()
 
 for (tr in names(target_scales_fig3)) {
+  if (!tr %in% colnames(clinical_ready)) next
   sub_df <- clinical_ready %>%
     dplyr::select(sample, Subtype, Score = all_of(tr), Age, Sex, BMI, hepatic_disease, kidney.function, CV_Metabolic_Cat, LEDD, Duration) %>%
-    mutate(Score = as.numeric(Score)) %>%
+    mutate(Score = clean_num(Score)) %>%
     drop_na()
   
   fit_m1 <- lm(Score ~ Subtype + Age + Sex + BMI, data = sub_df)
@@ -442,38 +544,42 @@ for (tr in names(target_scales_fig3)) {
     Clinical_Scale = target_scales_fig3[tr],
     Model1_P_Value = p_m1,
     Model2_P_Value = p_m2,
-    Tukey_S1_vs_S2 = tukey_res$p.value[tukey_res$contrast == "Subtype1 - Subtype2"],
-    Tukey_S1_vs_S3 = tukey_res$p.value[tukey_res$contrast == "Subtype1 - Subtype3"],
-    Tukey_S2_vs_S3 = tukey_res$p.value[tukey_res$contrast == "Subtype2 - Subtype3"]
+    Tukey_S1_vs_S2 = tukey_res$p.value[tukey_res$contrast == "Subtype_1 - Subtype_2"],
+    Tukey_S1_vs_S3 = tukey_res$p.value[tukey_res$contrast == "Subtype_1 - Subtype_3"],
+    Tukey_S2_vs_S3 = tukey_res$p.value[tukey_res$contrast == "Subtype_2 - Subtype_3"],
+    Diff_S1_vs_S2_Estimate = tukey_res$estimate[tukey_res$contrast == "Subtype_1 - Subtype_2"],
+    Diff_S2_vs_S3_Estimate = tukey_res$estimate[tukey_res$contrast == "Subtype_2 - Subtype_3"]
   )
 }
 
-# Export Supplementary Table ST15
+# Export Supplementary Table 15
 table_st15_ancova <- bind_rows(ancova_table_list) %>%
   mutate(
     Model1_FDR = p.adjust(Model1_P_Value, method = "BH"),
     Model2_FDR = p.adjust(Model2_P_Value, method = "BH")
   )
 write.csv(table_st15_ancova, file.path(output_dir, "Supplementary_Table_15_Dual_Model_ANCOVA_Results.csv"), row.names = FALSE)
+cat("Supplementary Table 15 exported successfully.\n")
 
 # Generate individual violin panels D to I
-plot_single_scale <- function(scale_col, scale_label, y_limits = NULL, step_inc = 0.1) {
+plot_single_scale <- function(scale_col, scale_label, y_limits = NULL, step_inc = 0.08) {
+  if (!scale_col %in% colnames(clinical_ready)) return(NULL)
   sub_data <- clinical_ready %>%
-    dplyr::select(Subtype, Score = all_of(scale_col)) %>%
-    mutate(Score = as.numeric(Score)) %>%
+    dplyr::select(Subtype, Score = all_of(scale_col), Age, Sex, BMI, hepatic_disease, kidney.function, CV_Metabolic_Cat, LEDD, Duration) %>%
+    mutate(Score = clean_num(Score)) %>%
     drop_na()
   
   fit <- lm(Score ~ Subtype + Age + Sex + BMI + hepatic_disease + kidney.function + CV_Metabolic_Cat + LEDD + Duration, 
-            data = clinical_ready)
+            data = sub_data)
   em  <- emmeans(fit, "Subtype")
   p_pairs <- as.data.frame(pairs(em, adjust = "tukey"))
   
   p_val_df <- data.frame(
-    group1 = c("Subtype1", "Subtype1", "Subtype2"),
-    group2 = c("Subtype2", "Subtype3", "Subtype3"),
-    p.adj  = c(p_pairs$p.value[p_pairs$contrast == "Subtype1 - Subtype2"],
-               p_pairs$p.value[p_pairs$contrast == "Subtype1 - Subtype3"],
-               p_pairs$p.value[p_pairs$contrast == "Subtype2 - Subtype3"])
+    group1 = c("Subtype_1", "Subtype_1", "Subtype_2"),
+    group2 = c("Subtype_2", "Subtype_3", "Subtype_3"),
+    p.adj  = c(p_pairs$p.value[p_pairs$contrast == "Subtype_1 - Subtype_2"],
+               p_pairs$p.value[p_pairs$contrast == "Subtype_1 - Subtype_3"],
+               p_pairs$p.value[p_pairs$contrast == "Subtype_2 - Subtype_3"])
   ) %>%
     mutate(
       p.signif = case_when(p.adj < 0.001 ~ "***", p.adj < 0.01 ~ "**", p.adj < 0.05 ~ "*", TRUE ~ "ns")
@@ -504,33 +610,33 @@ plot_single_scale <- function(scale_col, scale_label, y_limits = NULL, step_inc 
   return(p)
 }
 
-p_3d <- plot_single_scale("UPDRS_III", "UPDRS-III(Motor)", y_limits = c(0, 110), step_inc = 0.08)
-p_3e <- plot_single_scale("NMSS", "NMSS(Non-motor)", y_limits = c(0, 220), step_inc = 0.08)
-p_3f <- plot_single_scale("HAMD", "HAMD (Depression)", y_limits = c(0, 52), step_inc = 0.08)
-p_3g <- plot_single_scale("UPSIT", "UPSIT (Olfaction)", y_limits = c(0, 33), step_inc = 0.08)
-p_3h <- plot_single_scale("MMSE", "MMSE (Cognition)", y_limits = c(0, 33), step_inc = 0.08)
-p_3i <- plot_single_scale("PDSS", "PDSS (Sleep)", y_limits = c(0, 160), step_inc = 0.08)
+p_3d <- plot_single_scale("UPDRS3", "UPDRS-III (Motor)", y_limits = c(0, 110))
+p_3e <- plot_single_scale("NMSS_Total", "NMSS (Total Non-motor)", y_limits = c(0, 220))
+p_3f <- plot_single_scale("HAMD", "HAMD (Depression)", y_limits = c(0, 52))
+p_3g <- plot_single_scale("UPSIT", "UPSIT (Olfaction)", y_limits = c(0, 33))
+p_3h <- plot_single_scale("MMSE", "MMSE (Cognition)", y_limits = c(0, 33))
+p_3i <- plot_single_scale("PDSS", "PDSS (Sleep)", y_limits = c(0, 160))
 
-# Combine Figure 3 Panels
+# Assemble Figure 3 Main Layout
 fig3_top <- (p_fig3a | p_fig3b) + plot_layout(widths = c(1.1, 1.0))
 fig3_mid_bottom <- (p_fig3c | (p_3d | p_3e) / (p_3f | p_3g) / (p_3h | p_3i)) + plot_layout(widths = c(1.0, 1.4))
-
 full_fig3 <- fig3_top / fig3_mid_bottom + plot_layout(heights = c(1.0, 1.7))
 
-ggsave(file.path(output_dir, "Figure3_Main.pdf"), full_fig3, width = 12.0, height = 14.5, device = cairo_pdf)
+ggsave(file.path(output_dir, "Figure3_Main.pdf"), full_fig3, width = 12.0, height = 14.5, device = pdf_device)
 ggsave(file.path(output_dir, "Figure3_Main.png"), full_fig3, width = 12.0, height = 14.5, dpi = 300)
 
 # ==============================================================================
-# Step 8: Generate Supplementary Figure 5C (Scale-Driven Phenotype Violins)
+# Step 8: Figure S4 (CDF Stability & Phenotypes)
 # ==============================================================================
-cat("Generating Supplementary Figure 5C (Clinical Phenotypes Violins)...\n")
+cat("Generating Supplementary Figure 4 (S4A, S4B, S4C)...\n")
 
-pheno_colors <- c("Phenotype1" = "#1F78B4", "Phenotype2" = "#33A02C", "Phenotype3" = "#E31A1C")
+pheno_colors <- c("Phenotype_1" = "#1F78B4", "Phenotype_2" = "#33A02C", "Phenotype_3" = "#E31A1C")
 
 plot_pheno_scale <- function(scale_col, scale_label) {
+  if (!scale_col %in% colnames(clin_cluster_df)) return(NULL)
   sub_data <- clin_cluster_df %>%
     dplyr::select(Clinical_Phenotype, Score = all_of(scale_col)) %>%
-    mutate(Score = as.numeric(Score)) %>%
+    mutate(Score = clean_num(Score)) %>%
     drop_na()
   
   p <- ggplot(sub_data, aes(x = Clinical_Phenotype, y = Score, fill = Clinical_Phenotype)) +
@@ -539,7 +645,7 @@ plot_pheno_scale <- function(scale_col, scale_label) {
     geom_boxplot(width = 0.18, fill = "white", color = "black", outlier.shape = NA, linewidth = 0.6) +
     scale_fill_manual(values = pheno_colors) +
     scale_color_manual(values = pheno_colors) +
-    stat_compare_means(comparisons = list(c("Phenotype1", "Phenotype2"), c("Phenotype1", "Phenotype3"), c("Phenotype2", "Phenotype3")),
+    stat_compare_means(comparisons = list(c("Phenotype_1", "Phenotype_2"), c("Phenotype_1", "Phenotype_3"), c("Phenotype_2", "Phenotype_3")),
                        method = "wilcox.test", label = "p.signif", step.increase = 0.1, tip.length = 0.01, size = 3.6) +
     labs(title = scale_label, x = NULL, y = "Clinical Raw Score") +
     theme_classic(base_size = 11.5) +
@@ -549,20 +655,25 @@ plot_pheno_scale <- function(scale_col, scale_label) {
   return(p)
 }
 
-p_s5c_1 <- plot_pheno_scale("UPDRS_III", "UPDRS-III (Motor)")
-p_s5c_2 <- plot_pheno_scale("NMSS", "NMSS (Total Non-motor)")
-p_s5c_3 <- plot_pheno_scale("MMSE", "MMSE (Cognition)")
-p_s5c_4 <- plot_pheno_scale("HAMD", "HAMD (Depression)")
-p_s5c_5 <- plot_pheno_scale("PDSS", "PDSS (Sleep)")
-p_s5c_6 <- plot_pheno_scale("UPSIT", "UPSIT (Olfaction)")
+p_s4c_1 <- plot_pheno_scale("UPDRS3", "UPDRS-III (Motor)")
+p_s4c_2 <- plot_pheno_scale("NMSS_Total", "NMSS (Total Non-motor)")
+p_s4c_3 <- plot_pheno_scale("MMSE", "MMSE (Cognition)")
+p_s4c_4 <- plot_pheno_scale("HAMD", "HAMD (Depression)")
+p_s4c_5 <- plot_pheno_scale("PDSS", "PDSS (Sleep)")
+p_s4c_6 <- plot_pheno_scale("UPSIT", "UPSIT (Olfaction)")
 
-supp_fig5c_grid <- (p_s5c_1 | p_s5c_2 | p_s5c_3) / (p_s5c_4 | p_s5c_5 | p_s5c_6) +
-  plot_annotation(title = "Clinical Characteristics across 3 Scale-driven Phenotypes",
+supp_fig4c_grid <- (p_s4c_1 | p_s4c_2 | p_s4c_3) / (p_s4c_4 | p_s4c_5 | p_s4c_6) +
+  plot_annotation(title = "Clinical Characteristics across 3 Scale-driven Phenotypes (Supp Fig S4C)",
                   theme = theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 13)))
 
-full_supp_fig5 <- (p_supp5a | p_supp5b) / supp_fig5c_grid + plot_layout(heights = c(1.0, 2.0))
+full_supp_fig4 <- (p_supp4a | p_supp4b) / supp_fig4c_grid + plot_layout(heights = c(1.0, 2.0))
 
-ggsave(file.path(output_dir, "Supplementary_Figure_5.pdf"), full_supp_fig5, width = 12.0, height = 11.0, device = cairo_pdf)
-ggsave(file.path(output_dir, "Supplementary_Figure_5.png"), full_supp_fig5, width = 12.0, height = 11.0, dpi = 300)
+ggsave(file.path(output_dir, "Supplementary_Figure_4.pdf"), full_supp_fig4, width = 12.0, height = 11.0, device = pdf_device)
+ggsave(file.path(output_dir, "Supplementary_Figure_4.png"), full_supp_fig4, width = 12.0, height = 11.0, dpi = 300)
 
-cat("Analysis complete. Figure 3, Supplementary Figure 5, and Tables ST7, ST8, ST15 saved to:", output_dir, "\n")
+# Save intermediate objects for downstream Script 07
+saveRDS(clinical_ready, file.path(output_dir, "endotype_assignments.rds"))
+saveRDS(prot_residuals_mat, file.path(output_dir, "prot_residuals_mat.rds"))
+saveRDS(clin_cluster_df, file.path(output_dir, "clinical_phenotype_assignments.rds"))
+
+cat("\nPhase 6 pipeline complete. All figures and ST13–ST15 tables successfully exported to:", output_dir, "\n")

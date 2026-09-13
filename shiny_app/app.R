@@ -1,6 +1,6 @@
 # ==============================================================================
 # Plasma Proteomic Stratification & Clinical Decision Portal for Parkinson's Disease
-# Production-Grade Public Application (Nature Aging 2026)
+# Production-Grade Public Application (Nature Aging 2026) - Complete 7-Scale Edition
 # ==============================================================================
 
 library(shiny)
@@ -21,7 +21,7 @@ subtype_data  <- readRDS(file.path(models_dir, "subtype_rf_classifier.rds"))
 clinical_data <- readRDS(file.path(models_dir, "clinical_rf_predictors.rds"))
 metadata      <- readRDS(file.path(models_dir, "app_metadata.rds"))
 
-# 修复 UniProt 与 Symbol 映射表
+# 统一 UniProt 与 Symbol 映射目录
 all_syms <- metadata$all_target_symbols
 all_uids <- sapply(all_syms, function(s) {
   if (s %in% names(metadata$symbol_to_uniprot)) metadata$symbol_to_uniprot[[s]]
@@ -29,18 +29,22 @@ all_uids <- sapply(all_syms, function(s) {
   else "Unknown"
 })
 
+s1_official_symbols <- c("ITGA6", "ADAM10", "TSPAN14", "PDIA5", "SLC44A2", "CD151", "PLXNB2", "ITGA5", "EIF5B", "GNG5", "RHOF", "PIP4K2B", "TAOK3", "PURA", "ICAM2")
+s2_official_symbols <- c("VTN", "KNG1", "SERPING1", "TMEM9", "APOA4", "PROS1", "PTK7", "PIGR", "AMBP", "MGP", "C4A", "C4BPA", "APOC1", "ILF2", "IGHV3-7")
+s3_official_symbols <- c("SLC25A20", "MCCC2", "CLCN4", "IRAG2", "ECI1", "EDC4", "NDUFA9", "LONP1", "MYCBP2", "GLS", "PPP1R18", "APAF1", "CNOT1", "ATP5MK", "DLAT")
+
 catalog_df_full <- data.frame(
   Gene_Symbol = all_syms,
   UniProt_Accession = unname(all_uids),
   Panel_Classification = case_when(
     all_syms == "ITGA6" ~ "Subtype 1 & Diagnostic (Dual Role)",
-    all_syms %in% c("ADAM10", "TSPAN14", "CD151", "ITGA5", "ICAM2", "CSNK2A2", "PDIA5", "SLC44A2", "PLXNB2", "EIF5B", "RHOF", "GNG5", "TAOK3", "PURA") ~ "Subtype 1",
-    all_syms %in% c("VTN", "KNG1", "C4A", "C4BPA", "SERPING1", "PIGR", "IGHV3-7", "A0A0B4J2D5", "PROS1", "TMEM9", "PTK7", "APOA4", "MGP", "AMBP", "ILF2", "APOC1") ~ "Subtype 2",
-    all_syms %in% c("NDUFA9", "ATP5MK", "STOML2", "LONP1", "SLC25A20", "MCCC2", "CLCN4", "ECI1", "EDC4", "IRAG2", "GLS", "MYCBP2", "CNOT1", "APAF1", "PPP1R18") ~ "Subtype 3",
-    TRUE ~ "Diagnostic Panel Only"
+    all_syms %in% s1_official_symbols ~ "Subtype 1 Drivers",
+    all_syms %in% s2_official_symbols ~ "Subtype 2 Drivers",
+    all_syms %in% s3_official_symbols ~ "Subtype 3 Drivers",
+    TRUE ~ "Diagnostic Panel (16-Protein)"
   ),
   Diagnostic_16_Panel = ifelse(all_syms %in% diag_data$panel_symbols, "Yes", "No"),
-  Subtyping_45_Panel  = ifelse(all_syms %in% subtype_data$panel_symbols | all_syms == "IGHV3-7", "Yes", "No"),
+  Subtyping_45_Panel  = ifelse(all_syms %in% subtype_data$panel_symbols | all_syms %in% c("IGHV3-7", s1_official_symbols, s2_official_symbols, s3_official_symbols), "Yes", "No"),
   stringsAsFactors = FALSE
 )
 
@@ -58,9 +62,9 @@ dict <- list(
     prot_header = "2. Plasma Proteomics Data Provision",
     mode_switch = "Choose How to Provide Proteomic Data:",
     mode_file = "Option A: Upload Full File or Paste Table",
-    mode_form = "Option B: Manual Entry (61 Key Biomarkers)",
+    mode_form = "Option B: Manual Entry (Key Biomarkers)",
     upload_single_label = "Upload Patient Proteomic File (.csv, .xlsx, .tsv):",
-    upload_single_help = "You can upload a full DIA proteomics matrix. All target markers will be auto-extracted.",
+    upload_single_help = "Supports full DIA proteomics matrices. Target markers will be automatically extracted.",
     paste_single_label = "Or Directly Paste Data from Excel (2 Columns: Protein, Value):",
     scale_switch = "Measurement Scale of Manual Inputs:",
     scale_raw = "Raw MS Log2 Intensity (Auto-Standardized)",
@@ -68,8 +72,8 @@ dict <- list(
     btn_predict = "Run Comprehensive Patient Prediction",
     diag_card_title = "Diagnostic Risk Assessment (16-Protein Offset Model)",
     endotype_card_title = "Predicted Molecular Endotype (45-Biomarker Classifier)",
-    scores_card_title = "Predicted Multi-Domain Symptom Profile (10-Fold CV)",
-    therapy_card_title = "Tailored Precision Medicine Roadmap (Figure 6d)",
+    scores_card_title = "Predicted Multi-Domain Clinical Trait Scores (Figure 5F, 10-Fold CV)",
+    therapy_card_title = "Tailored Precision Medicine Roadmap (Figure 6D)",
     
     # Tab Batch (Cohort)
     upload_header = "Cohort Batch Data Input",
@@ -78,9 +82,9 @@ dict <- list(
     demo_btn = "Load Benchmark Example Cohort",
     covar_help = "Default baseline values will be applied if clinical variables are missing.",
     download_btn = "Download Prediction Report (CSV)",
-    results_header = "1. Predicted Diagnostics, Endotypes & Clinical Scores",
+    results_header = "1. Predicted Diagnostics, Endotypes & Multi-Domain Scores (7 Scales)",
     pie_header = "2. Molecular Endotype Distribution",
-    radar_header = "3. Multi-Domain Phenotypic Severity Radar",
+    radar_header = "3. Multi-Domain Phenotypic Severity Radar (7 Dimensions)",
     
     disclaimer = "Disclaimer: This software is designed strictly for scientific research and translational exploration. It does not constitute standalone clinical diagnostic advice."
   ),
@@ -96,7 +100,7 @@ dict <- list(
     prot_header = "2. 血浆蛋白质组学数据提供",
     mode_switch = "请选择蛋白质组数据提供方式：",
     mode_file = "方式一：上传完整组学文件 / 粘贴表格",
-    mode_form = "方式二：手动表单录入 (61个核心标志物)",
+    mode_form = "方式二：手动表单录入 (核心标志物)",
     upload_single_label = "上传单患者完整组学文件 (.csv, .xlsx, .tsv)：",
     upload_single_help = "支持上传完整 DIA 质谱矩阵。系统会自动检索并提取目标标志物。",
     paste_single_label = "或直接从 Excel 复制两列数据粘贴于此 (蛋白名, 表达量)：",
@@ -106,8 +110,8 @@ dict <- list(
     btn_predict = "运行个体化精准分层分析",
     diag_card_title = "疾病诊断风险评估 (16 蛋白 Offset 模型)",
     endotype_card_title = "预测分子内型归属 (45 标志物随机森林分类器)",
-    scores_card_title = "预测多维度临床症状评分 (10 折交叉验证模型)",
-    therapy_card_title = "匹配的精准医疗干预路线图 (Figure 6d)",
+    scores_card_title = "预测多维度临床症状评分 (完整 7 大量表，Figure 5F)",
+    therapy_card_title = "匹配的精准医疗干预路线图 (Figure 6D)",
     
     # Tab Batch (Cohort)
     upload_header = "队列数据上传与配置",
@@ -116,9 +120,9 @@ dict <- list(
     demo_btn = "加载基准测试队列样例",
     covar_help = "未提供的临床变量将自动采用人群基线均值填补。",
     download_btn = "导出完整预测报告 (CSV)",
-    results_header = "1. 预测诊断、分子内型与表型评分总览",
+    results_header = "1. 预测诊断、分子内型与 7 大临床量表总览",
     pie_header = "2. 分子内型人群构成比例",
-    radar_header = "3. 多维度临床严重度表型指纹雷达图",
+    radar_header = "3. 多维度临床表型指纹雷达图 (7 维度)",
     
     disclaimer = "免责声明：本系统仅供科学研究与学术探讨使用，不作为独立临床诊断或处方依据。"
   )
@@ -201,32 +205,32 @@ main_app_ui <- page_navbar(
               fluidRow(column(6, numericInput("in_TSPAN14", "TSPAN14", value = 0.0)), column(6, numericInput("in_PDIA5", "PDIA5", value = 0.0))),
               fluidRow(column(6, numericInput("in_SLC44A2", "SLC44A2", value = 0.0)), column(6, numericInput("in_CD151", "CD151", value = 0.0))),
               fluidRow(column(6, numericInput("in_PLXNB2", "PLXNB2", value = 0.0)), column(6, numericInput("in_EIF5B", "EIF5B", value = 0.0))),
-              fluidRow(column(6, numericInput("in_RHOF", "RHOF", value = 0.0)), column(6, numericInput("in_ITGA5", "ITGA5", value = 0.0))),
-              fluidRow(column(6, numericInput("in_GNG5", "GNG5", value = 0.0)), column(6, numericInput("in_TAOK3", "TAOK3", value = 0.0))),
-              fluidRow(column(6, numericInput("in_PURA", "PURA", value = 0.0)), column(6, numericInput("in_ICAM2", "ICAM2", value = 0.0))),
-              fluidRow(column(6, numericInput("in_CSNK2A2", "CSNK2A2", value = 0.0)))
+              fluidRow(column(6, numericInput("in_ITGA5", "ITGA5", value = 0.0)), column(6, numericInput("in_GNG5", "GNG5", value = 0.0))),
+              fluidRow(column(6, numericInput("in_RHOF", "RHOF", value = 0.0)), column(6, numericInput("in_PIP4K2B", "PIP4K2B", value = 0.0))),
+              fluidRow(column(6, numericInput("in_TAOK3", "TAOK3", value = 0.0)), column(6, numericInput("in_PURA", "PURA", value = 0.0))),
+              fluidRow(column(6, numericInput("in_ICAM2", "ICAM2", value = 0.0)))
             ),
             accordion_panel(
               "Subtype 2 Markers (15 Prots)",
               fluidRow(column(6, numericInput("in_VTN", "VTN", value = 0.0)), column(6, numericInput("in_KNG1", "KNG1", value = 0.0))),
-              fluidRow(column(6, numericInput("in_TMEM9", "TMEM9", value = 0.0)), column(6, numericInput("in_PTK7", "PTK7", value = 0.0))),
-              fluidRow(column(6, numericInput("in_SERPING1", "SERPING1", value = 0.0)), column(6, numericInput("in_APOA4", "APOA4", value = 0.0))),
-              fluidRow(column(6, numericInput("in_PIGR", "PIGR", value = 0.0)), column(6, numericInput("in_PROS1", "PROS1", value = 0.0))),
-              fluidRow(column(6, numericInput("in_MGP", "MGP", value = 0.0)), column(6, numericInput("in_AMBP", "AMBP", value = 0.0))),
-              fluidRow(column(6, numericInput("in_C4BPA", "C4BPA", value = 0.0)), column(6, numericInput("in_C4A", "C4A", value = 0.0))),
-              fluidRow(column(6, numericInput("in_ILF2", "ILF2", value = 0.0)), column(6, numericInput("in_IGHV37", "IGHV3-7 (A0A0B4J2D5)", value = 0.0))),
-              fluidRow(column(6, numericInput("in_APOC1", "APOC1", value = 0.0)))
+              fluidRow(column(6, numericInput("in_SERPING1", "SERPING1", value = 0.0)), column(6, numericInput("in_TMEM9", "TMEM9", value = 0.0))),
+              fluidRow(column(6, numericInput("in_APOA4", "APOA4", value = 0.0)), column(6, numericInput("in_PROS1", "PROS1", value = 0.0))),
+              fluidRow(column(6, numericInput("in_PTK7", "PTK7", value = 0.0)), column(6, numericInput("in_PIGR", "PIGR", value = 0.0))),
+              fluidRow(column(6, numericInput("in_AMBP", "AMBP", value = 0.0)), column(6, numericInput("in_MGP", "MGP", value = 0.0))),
+              fluidRow(column(6, numericInput("in_C4A", "C4A", value = 0.0)), column(6, numericInput("in_C4BPA", "C4BPA", value = 0.0))),
+              fluidRow(column(6, numericInput("in_APOC1", "APOC1", value = 0.0)), column(6, numericInput("in_ILF2", "ILF2", value = 0.0))),
+              fluidRow(column(6, numericInput("in_IGHV37", "IGHV3-7", value = 0.0)))
             ),
             accordion_panel(
               "Subtype 3 Markers (15 Prots)",
               fluidRow(column(6, numericInput("in_SLC25A20", "SLC25A20", value = 0.0)), column(6, numericInput("in_MCCC2", "MCCC2", value = 0.0))),
-              fluidRow(column(6, numericInput("in_CLCN4", "CLCN4", value = 0.0)), column(6, numericInput("in_ECI1", "ECI1", value = 0.0))),
-              fluidRow(column(6, numericInput("in_EDC4", "EDC4", value = 0.0)), column(6, numericInput("in_IRAG2", "IRAG2", value = 0.0))),
-              fluidRow(column(6, numericInput("in_NDUFA9", "NDUFA9", value = 0.0)), column(6, numericInput("in_GLS", "GLS", value = 0.0))),
-              fluidRow(column(6, numericInput("in_MYCBP2", "MYCBP2", value = 0.0)), column(6, numericInput("in_LONP1", "LONP1", value = 0.0))),
+              fluidRow(column(6, numericInput("in_CLCN4", "CLCN4", value = 0.0)), column(6, numericInput("in_IRAG2", "IRAG2", value = 0.0))),
+              fluidRow(column(6, numericInput("in_ECI1", "ECI1", value = 0.0)), column(6, numericInput("in_EDC4", "EDC4", value = 0.0))),
+              fluidRow(column(6, numericInput("in_NDUFA9", "NDUFA9", value = 0.0)), column(6, numericInput("in_LONP1", "LONP1", value = 0.0))),
+              fluidRow(column(6, numericInput("in_MYCBP2", "MYCBP2", value = 0.0)), column(6, numericInput("in_GLS", "GLS", value = 0.0))),
+              fluidRow(column(6, numericInput("in_PPP1R18", "PPP1R18", value = 0.0)), column(6, numericInput("in_APAF1", "APAF1", value = 0.0))),
               fluidRow(column(6, numericInput("in_CNOT1", "CNOT1", value = 0.0)), column(6, numericInput("in_ATP5MK", "ATP5MK", value = 0.0))),
-              fluidRow(column(6, numericInput("in_STOML2", "STOML2", value = 0.0)), column(6, numericInput("in_APAF1", "APAF1", value = 0.0))),
-              fluidRow(column(6, numericInput("in_PPP1R18", "PPP1R18", value = 0.0)))
+              fluidRow(column(6, numericInput("in_DLAT", "DLAT", value = 0.0)))
             )
           )
         ),
@@ -240,8 +244,8 @@ main_app_ui <- page_navbar(
           h6(textOutput("ui_endotype_card_title"), class = "fw-bold"),
           uiOutput("card_single_endotype"),
           hr(),
-          h6(textOutput("ui_scores_card_title"), class = "fw-bold text-muted small"),
-          uiOutput("card_single_scales")
+          h6(textOutput("ui_scores_card_title"), class = "fw-bold text-primary"),
+          uiOutput("card_single_scales") # 💡 7 大量表卡片渲染区
         ),
         card(
           card_header(class = "bg-success text-white", textOutput("ui_therapy_card_title")),
@@ -289,7 +293,7 @@ main_app_ui <- page_navbar(
     title = textOutput("ui_tab_catalog"),
     icon = icon("list-check"),
     card(
-      card_header("Complete Biomarker Panel Directory & Reference Mapping (N = 61 Unique Proteins)"),
+      card_header("Complete Biomarker Panel Directory & Reference Mapping (N = 60 Unique Proteins)"),
       DTOutput("table_marker_catalog")
     )
   ),
@@ -316,22 +320,16 @@ ui <- fluidPage(
         h4("Peer-Review Access Portal", class = "text-primary fw-bold text-center mb-2"),
         h6("Nature Aging (2026) Dedicated Reviewer Channel", class = "text-muted text-center small mb-4"),
         p("This clinical decision-support portal is currently under active peer-review. Please enter the access passcode provided in the Response to Reviewers letter.", class = "text-muted small text-center mb-3"),
-        
-        # 密码输入框
         passwordInput("passcode", "Enter Reviewer Passcode / 访问密码:", placeholder = "Passcode"),
-        
-        # 💡【核心新增】：显示/隐藏密码切换勾选框 (原生轻量 JS 动态切换)
         div(style = "margin-top: -10px; margin-bottom: 18px;",
             tags$input(type = "checkbox", id = "toggle_pw", 
                        onclick = "var x = document.getElementById('passcode'); x.type = (x.type === 'password') ? 'text' : 'password';"),
             tags$label(`for` = "toggle_pw", " 👁️ Show Passcode / 显示明文密码", style = "font-size: 0.85rem; color: #495057; cursor: pointer; user-select: none;")
         ),
-        
         actionButton("btn_login", "Enter System / 解锁访问", class = "btn-primary w-100", icon = icon("key"))
     )
   ),
   
-  # 验证通过展示完整界面
   conditionalPanel(
     condition = "output.authenticated == true",
     main_app_ui
@@ -341,11 +339,9 @@ ui <- fluidPage(
 # --- 5. Server 计算引擎 ---
 server <- function(input, output, session) {
   
-  # 💡【核心修复】：必须在 Server 顶部第一行优先声明反应式容器！
   auth          <- reactiveVal(FALSE)
   dataset_input <- reactiveVal(NULL)
   
-  # 密码认证逻辑
   observeEvent(input$btn_login, {
     if (trimws(input$passcode) == "NatureAging2026") {
       auth(TRUE)
@@ -357,7 +353,6 @@ server <- function(input, output, session) {
   output$authenticated <- reactive({ auth() })
   outputOptions(output, "authenticated", suspendWhenHidden = FALSE)
   
-  # 语言环境
   L <- reactive({
     lang <- input$app_lang
     if (is.null(lang) || !lang %in% c("en", "zh")) lang <- "en"
@@ -398,7 +393,7 @@ server <- function(input, output, session) {
   output$ui_pie_header      <- renderText({ L()$pie_header })
   output$ui_radar_header    <- renderText({ L()$radar_header })
   
-  # --- 1. 单患者全量预测推理 ---
+  # --- 1. 单患者全量预测推理 (集成完整 7 大量表) ---
   single_prediction <- reactive({
     req(input$btn_predict_single)
     
@@ -457,6 +452,7 @@ server <- function(input, output, session) {
         if (!is.na(u)) prot_values[[u]] <<- val
       }
       
+      # 16 Diagnostic Panel
       read_prot("CSRP1", input$in_CSRP1); read_prot("ARL8B", input$in_ARL8B)
       read_prot("RAP1A", input$in_RAP1A); read_prot("LECT2", input$in_LECT2)
       read_prot("SNRPD3", input$in_SNRPD3); read_prot("STAG2", input$in_STAG2)
@@ -465,23 +461,26 @@ server <- function(input, output, session) {
       read_prot("CSNK2B", input$in_CSNK2B); read_prot("PLEKHF1", input$in_PLEKHF1)
       read_prot("SPTLC1", input$in_SPTLC1); read_prot("CYBB", input$in_CYBB); read_prot("DHX29", input$in_DHX29)
       
+      # Subtype 1 (15 Proteins, including PIP4K2B)
       read_prot("ITGA6", input$in_ITGA6); read_prot("ADAM10", input$in_ADAM10); read_prot("TSPAN14", input$in_TSPAN14)
       read_prot("PDIA5", input$in_PDIA5); read_prot("SLC44A2", input$in_SLC44A2); read_prot("CD151", input$in_CD151)
-      read_prot("PLXNB2", input$in_PLXNB2); read_prot("EIF5B", input$in_EIF5B); read_prot("RHOF", input$in_RHOF)
-      read_prot("ITGA5", input$in_ITGA5); read_prot("GNG5", input$in_GNG5); read_prot("TAOK3", input$in_TAOK3)
-      read_prot("PURA", input$in_PURA); read_prot("ICAM2", input$in_ICAM2); read_prot("CSNK2A2", input$in_CSNK2A2)
+      read_prot("PLXNB2", input$in_PLXNB2); read_prot("EIF5B", input$in_EIF5B); read_prot("ITGA5", input$in_ITGA5)
+      read_prot("GNG5", input$in_GNG5); read_prot("RHOF", input$in_RHOF); read_prot("PIP4K2B", input$in_PIP4K2B)
+      read_prot("TAOK3", input$in_TAOK3); read_prot("PURA", input$in_PURA); read_prot("ICAM2", input$in_ICAM2)
       
-      read_prot("VTN", input$in_VTN); read_prot("KNG1", input$in_KNG1); read_prot("TMEM9", input$in_TMEM9)
-      read_prot("PTK7", input$in_PTK7); read_prot("SERPING1", input$in_SERPING1); read_prot("APOA4", input$in_APOA4)
-      read_prot("PIGR", input$in_PIGR); read_prot("PROS1", input$in_PROS1); read_prot("MGP", input$in_MGP)
-      read_prot("AMBP", input$in_AMBP); read_prot("C4BPA", input$in_C4BPA); read_prot("C4A", input$in_C4A)
-      read_prot("ILF2", input$in_ILF2); read_prot("A0A0B4J2D5", input$in_IGHV37); read_prot("APOC1", input$in_APOC1)
+      # Subtype 2 (15 Proteins, including IGHV3-7)
+      read_prot("VTN", input$in_VTN); read_prot("KNG1", input$in_KNG1); read_prot("SERPING1", input$in_SERPING1)
+      read_prot("TMEM9", input$in_TMEM9); read_prot("APOA4", input$in_APOA4); read_prot("PROS1", input$in_PROS1)
+      read_prot("PTK7", input$in_PTK7); read_prot("PIGR", input$in_PIGR); read_prot("AMBP", input$in_AMBP)
+      read_prot("MGP", input$in_MGP); read_prot("C4A", input$in_C4A); read_prot("C4BPA", input$in_C4BPA)
+      read_prot("APOC1", input$in_APOC1); read_prot("ILF2", input$in_ILF2); read_prot("A0A0B4J2B5", input$in_IGHV37)
       
+      # Subtype 3 (15 Proteins, including DLAT)
       read_prot("SLC25A20", input$in_SLC25A20); read_prot("MCCC2", input$in_MCCC2); read_prot("CLCN4", input$in_CLCN4)
-      read_prot("ECI1", input$in_ECI1); read_prot("EDC4", input$in_EDC4); read_prot("IRAG2", input$in_IRAG2)
-      read_prot("NDUFA9", input$in_NDUFA9); read_prot("GLS", input$in_GLS); read_prot("MYCBP2", input$in_MYCBP2)
-      read_prot("LONP1", input$in_LONP1); read_prot("CNOT1", input$in_CNOT1); read_prot("ATP5MK", input$in_ATP5MK)
-      read_prot("STOML2", input$in_STOML2); read_prot("APAF1", input$in_APAF1); read_prot("PPP1R18", input$in_PPP1R18)
+      read_prot("IRAG2", input$in_IRAG2); read_prot("ECI1", input$in_ECI1); read_prot("EDC4", input$in_EDC4)
+      read_prot("NDUFA9", input$in_NDUFA9); read_prot("LONP1", input$in_LONP1); read_prot("MYCBP2", input$in_MYCBP2)
+      read_prot("GLS", input$in_GLS); read_prot("PPP1R18", input$in_PPP1R18); read_prot("APAF1", input$in_APAF1)
+      read_prot("CNOT1", input$in_CNOT1); read_prot("ATP5MK", input$in_ATP5MK); read_prot("DLAT", input$in_DLAT)
     }
     
     # 诊断模型计算
@@ -515,28 +514,31 @@ server <- function(input, output, session) {
     sub_probs <- predict(subtype_data$classifier, newdata = sub_input, type = "prob")[1, ]
     assigned_st <- names(sub_probs)[which.max(sub_probs)]
     
-    # 连续量表预测
+    # 💡 7 大连续多维量表预测
     rf_single_feat <- data.frame(
       Age = age, Sex = sex, BMI = bmi, hepatic = hep, kidney = kid, CV_Met = cv, LEDD = ledd, Duration = dur, sub_input
     )
     colnames(rf_single_feat) <- make.names(colnames(rf_single_feat))
     
     pred_upd3  <- predict(clinical_data$models$UPDRS3_Score, newdata = rf_single_feat)
-    pred_hamd  <- predict(clinical_data$models$Depression_Score, newdata = rf_single_feat)
+    pred_hy    <- predict(clinical_data$models$HY_Stage, newdata = rf_single_feat)
+    pred_hamd  <- predict(clinical_data$models$HAMD_Score, newdata = rf_single_feat)
+    pred_nmss  <- predict(clinical_data$models$NMSS_Score, newdata = rf_single_feat)
+    pred_mmse  <- predict(clinical_data$models$MMSE_Score, newdata = rf_single_feat)
+    pred_pdss  <- predict(clinical_data$models$PDSS_Score, newdata = rf_single_feat)
     pred_upsit <- predict(clinical_data$models$UPSIT_Score, newdata = rf_single_feat)
     
     list(pd_prob = pd_prob, sub_probs = sub_probs, assigned_st = assigned_st,
-         upd3 = pred_upd3, hamd = pred_hamd, upsit = pred_upsit)
+         upd3 = pred_upd3, hy = pred_hy, hamd = pred_hamd, nmss = pred_nmss,
+         mmse = pred_mmse, pdss = pred_pdss, upsit = pred_upsit)
   })
   
   output$card_single_diag <- renderUI({
     res <- tryCatch(single_prediction(), error = function(e) NULL)
     is_zh <- input$app_lang == "zh"
-    
     if (is.null(res)) {
-      return(p(if(is_zh) "请配置左侧临床特征并提供蛋白质数据，点击下方按钮运行综合分析。" else "Configure clinical parameters & provide proteomic data on the left, then click 'Run Comprehensive Patient Prediction'.", class="text-muted"))
+      return(p(if(is_zh) "请配置左侧临床特征并提供蛋白质数据，点击下方按钮运行综合分析。" else "Configure parameters on the left and click 'Run Comprehensive Patient Prediction'.", class="text-muted"))
     }
-    
     prob_val <- res$pd_prob * 100
     risk_class <- if(prob_val >= 50) "alert alert-danger" else "alert alert-success"
     call_text <- if(prob_val >= 50) {
@@ -546,7 +548,6 @@ server <- function(input, output, session) {
       if(is_zh) sprintf("低风险：倾向健康对照基线 (患病概率: %.1f%%)", prob_val) 
       else sprintf("Low Risk: Consistent with Control Baseline (Probability: %.1f%%)", prob_val)
     }
-    
     div(class = risk_class, style="font-size:1.05rem; font-weight:bold;", call_text)
   })
   
@@ -557,7 +558,7 @@ server <- function(input, output, session) {
     
     st <- res$assigned_st
     st_title <- case_when(
-      st == "Subtype_1" ~ if(is_zh) "预测归属：Subtype 1 (整合素与自噬代偿轴)" else "Predicted Endotype: Subtype 1 (Integrin & Autophagy Axis)",
+      st == "Subtype_1" ~ if(is_zh) "预测归属：Subtype 1 (整合素与自噬稳态轴)" else "Predicted Endotype: Subtype 1 (Integrin & Autophagy Axis)",
       st == "Subtype_2" ~ if(is_zh) "预测归属：Subtype 2 (神经炎症与补体免疫轴)" else "Predicted Endotype: Subtype 2 (Neuroinflammatory & Immune Axis)",
       TRUE ~ if(is_zh) "预测归属：Subtype 3 (线粒体代谢脆弱轴)" else "Predicted Endotype: Subtype 3 (Mitochondrial & Metabolic Axis)"
     )
@@ -571,6 +572,7 @@ server <- function(input, output, session) {
     )
   })
   
+  # 💡 7 大量表整齐卡片布局
   output$card_single_scales <- renderUI({
     res <- tryCatch(single_prediction(), error = function(e) NULL)
     if (is.null(res)) return(NULL)
@@ -578,14 +580,29 @@ server <- function(input, output, session) {
     
     tagList(
       fluidRow(
-        column(4, div(class="card p-2 text-center bg-light", 
-                      div(class="text-muted small", if(is_zh) "预测运动 (UPDRS-III)" else "Pred. Motor (UPDRS-III)"),
+        column(3, div(class="card p-2 text-center bg-light", 
+                      div(class="text-muted small", if(is_zh) "运动 (UPDRS-III)" else "Motor (UPDRS-III)"),
                       h5(round(res$upd3, 1), class="fw-bold text-primary"))),
-        column(4, div(class="card p-2 text-center bg-light", 
-                      div(class="text-muted small", if(is_zh) "预测抑郁 (HAMD)" else "Pred. Depression (HAMD)"),
+        column(3, div(class="card p-2 text-center bg-light", 
+                      div(class="text-muted small", if(is_zh) "疾病分期 (H&Y)" else "Stage (H&Y)"),
+                      h5(round(res$hy, 1), class="fw-bold text-primary"))),
+        column(3, div(class="card p-2 text-center bg-light", 
+                      div(class="text-muted small", if(is_zh) "抑郁 (HAMD)" else "Depression (HAMD)"),
                       h5(round(res$hamd, 1), class="fw-bold text-danger"))),
+        column(3, div(class="card p-2 text-center bg-light", 
+                      div(class="text-muted small", if(is_zh) "总非运动 (NMSS)" else "Non-motor (NMSS)"),
+                      h5(round(res$nmss, 1), class="fw-bold text-danger")))
+      ),
+      div(style="height:8px;"),
+      fluidRow(
         column(4, div(class="card p-2 text-center bg-light", 
-                      div(class="text-muted small", if(is_zh) "预测嗅觉 (UPSIT)" else "Pred. Olfaction (UPSIT)"),
+                      div(class="text-muted small", if(is_zh) "认知功能 (MMSE)" else "Cognition (MMSE)"),
+                      h5(round(res$mmse, 1), class="fw-bold text-success"))),
+        column(4, div(class="card p-2 text-center bg-light", 
+                      div(class="text-muted small", if(is_zh) "睡眠质量 (PDSS)" else "Sleep (PDSS)"),
+                      h5(round(res$pdss, 1), class="fw-bold text-info"))),
+        column(4, div(class="card p-2 text-center bg-light", 
+                      div(class="text-muted small", if(is_zh) "嗅觉功能 (UPSIT)" else "Olfaction (UPSIT)"),
                       h5(round(res$upsit, 1), class="fw-bold text-warning")))
       )
     )
@@ -631,7 +648,7 @@ server <- function(input, output, session) {
     }
   })
   
-  # --- 2. 批量队列计算 ---
+  # --- 2. 批量队列计算 (包含 7 大量表预测) ---
   observeEvent(input$btn_load_demo, {
     demo_file <- file.path(data_dir, "example_test_samples.csv")
     if (file.exists(demo_file)) {
@@ -704,10 +721,14 @@ server <- function(input, output, session) {
     )
     colnames(rf_feat_df) <- make.names(colnames(rf_feat_df))
     
+    # 💡 7 大多维量表批量预测
     pred_upd3  <- predict(clinical_data$models$UPDRS3_Score, newdata = rf_feat_df)
-    pred_hamd  <- predict(clinical_data$models$Depression_Score, newdata = rf_feat_df)
-    pred_upsit <- predict(clinical_data$models$UPSIT_Score, newdata = rf_feat_df)
     pred_hy    <- predict(clinical_data$models$HY_Stage, newdata = rf_feat_df)
+    pred_hamd  <- predict(clinical_data$models$HAMD_Score, newdata = rf_feat_df)
+    pred_nmss  <- predict(clinical_data$models$NMSS_Score, newdata = rf_feat_df)
+    pred_mmse  <- predict(clinical_data$models$MMSE_Score, newdata = rf_feat_df)
+    pred_pdss  <- predict(clinical_data$models$PDSS_Score, newdata = rf_feat_df)
+    pred_upsit <- predict(clinical_data$models$UPSIT_Score, newdata = rf_feat_df)
     
     data.frame(
       Sample_ID = if("sample" %in% colnames(raw_df)) raw_df$sample else paste0("Sample_", 1:n_samps),
@@ -717,10 +738,13 @@ server <- function(input, output, session) {
       Prob_Subtype1 = sprintf("%.1f%%", sub_probs[, "Subtype_1"] * 100),
       Prob_Subtype2 = sprintf("%.1f%%", sub_probs[, "Subtype_2"] * 100),
       Prob_Subtype3 = sprintf("%.1f%%", sub_probs[, "Subtype_3"] * 100),
-      Pred_Motor_UPDRS3 = round(pred_upd3, 1),
-      Pred_Depression_HAMD = round(pred_hamd, 1),
-      Pred_Olfaction_UPSIT = round(pred_upsit, 1),
-      Pred_Hoehn_Yahr = round(pred_hy, 1)
+      Pred_Motor_UPDRS3   = round(pred_upd3, 1),
+      Pred_Stage_HY       = round(pred_hy, 1),
+      Pred_Depression_HAMD= round(pred_hamd, 1),
+      Pred_NonMotor_NMSS  = round(pred_nmss, 1),
+      Pred_Cognition_MMSE = round(pred_mmse, 1),
+      Pred_Sleep_PDSS     = round(pred_pdss, 1),
+      Pred_Olfaction_UPSIT= round(pred_upsit, 1)
     )
   })
   
@@ -747,48 +771,52 @@ server <- function(input, output, session) {
     req(batch_predictions())
     df <- batch_predictions()
     
-    mean_upd3  <- mean(df$Pred_Motor_UPDRS3, na.rm = TRUE)
-    mean_hamd  <- mean(df$Pred_Depression_HAMD, na.rm = TRUE)
-    mean_anosm <- 40 - mean(df$Pred_Olfaction_UPSIT, na.rm = TRUE)
-    mean_hy    <- mean(df$Pred_Hoehn_Yahr, na.rm = TRUE) * 10
+    m_upd3  <- mean(df$Pred_Motor_UPDRS3, na.rm = TRUE)
+    m_hy    <- mean(df$Pred_Stage_HY, na.rm = TRUE) * 10
+    m_hamd  <- mean(df$Pred_Depression_HAMD, na.rm = TRUE) * 2
+    m_nmss  <- mean(df$Pred_NonMotor_NMSS, na.rm = TRUE) / 2
+    m_mmse  <- (30 - mean(df$Pred_Cognition_MMSE, na.rm = TRUE)) * 5
+    m_pdss  <- (150 - mean(df$Pred_Sleep_PDSS, na.rm = TRUE)) / 2
+    m_upsit <- (40 - mean(df$Pred_Olfaction_UPSIT, na.rm = TRUE))
+    
+    r_vals <- c(m_upd3, m_hy, m_hamd, m_nmss, m_mmse, m_pdss, m_upsit, m_upd3)
+    t_labels <- c('Motor (UPDRS-III)', 'Stage (H&Y)', 'Depression (HAMD)', 'Non-Motor (NMSS)', 
+                  'Cognitive Decline', 'Sleep Deficit', 'Olfactory Loss', 'Motor (UPDRS-III)')
     
     plot_ly(type = 'scatterpolar', fill = 'toself',
-            r = c(mean_upd3, mean_hamd * 3, mean_anosm, mean_hy, mean_upd3),
-            theta = c('Motor (UPDRS-III)', 'Depression (HAMD)', 'Olfactory Loss (40-UPSIT)', 'Disease Stage (H&Y)', 'Motor (UPDRS-III)'),
+            r = r_vals, theta = t_labels,
             line = list(color = '#1F78B4')) %>%
-      layout(polar = list(radialaxis = list(visible = TRUE, range = c(0, max(50, mean_upd3*1.2)))),
+      layout(polar = list(radialaxis = list(visible = TRUE, range = c(0, max(50, max(r_vals)*1.15)))),
              margin = list(t=25, b=25, l=25, r=25))
   })
   
   output$btn_download_csv <- downloadHandler(
-    filename = function() { paste0("PD_Proteomics_Stratification_Report_", Sys.Date(), ".csv") },
+    filename = function() { paste0("PD_Proteomics_Stratification_Report_7Scales_", Sys.Date(), ".csv") },
     content = function(file) { write.csv(batch_predictions(), file, row.names = FALSE) }
   )
   
-  # --- 3. 标志物目录 ---
   output$table_marker_catalog <- renderDT({
     datatable(catalog_df_full, options = list(pageLength = 12, scrollX = TRUE), rownames = FALSE) %>%
       formatStyle('Panel_Classification', 
                   color = styleEqual(
-                    c("Subtype 1 & Diagnostic (Dual Role)", "Subtype 1", "Subtype 2", "Subtype 3", "Diagnostic Panel Only"),
-                    c("#756bb1", "#d73027", "#1F78B4", "#d95f02", "#666666")
+                    c("Subtype 1 Drivers", "Subtype 2 Drivers", "Subtype 3 Drivers", "Diagnostic Panel (16-Protein)", "Subtype 1 & Diagnostic (Dual Role)"),
+                    c("#d73027", "#1F78B4", "#d95f02", "#756bb1", "#6a3d9a")
                   ), fontWeight = 'bold')
   })
   
-  # --- 4. 关于 ---
   output$about_content <- renderUI({
     is_zh <- input$app_lang == "zh"
     if (is_zh) {
       tagList(
         p("本平台基于高通量 Orbitrap Astral DIA 质谱技术对大型双中心东亚队列（N = 1,119）进行系统研究所构建。"),
-        p("整合了校正 6 协变量的 16 蛋白临床 Offset 诊断模型，以及校正 8 协变量（剥离左旋多巴用药与病程）的 45 标志物分子内型分类器。"),
+        p("整合了校正 6 协变量的 16 蛋白临床 Offset 诊断模型，以及校正 8 协变量的 45 标志物分子内型分类器与 7 大临床量表预测引擎（Figure 5F）。"),
         p(strong("参考文献："), "Large-scale plasma proteomics identifies molecularly distinct PD endotypes associated with motor and non-motor phenotypes. Nature Aging, 2026."),
         p(class="text-muted small", L()$disclaimer)
       )
     } else {
       tagList(
         p("This interactive clinical decision-support portal was established using high-throughput Orbitrap Astral DIA mass spectrometry across a dual-center East Asian cohort (N = 1,119)."),
-        p("It integrates a 16-protein clinical-offset diagnostic model alongside an 8-covariate residualized 45-biomarker molecular endotyping classifier."),
+        p("It integrates a 16-protein clinical-offset diagnostic model alongside an 8-covariate residualized 45-biomarker molecular endotyping classifier and 7 continuous clinical trait predictors (Figure 5F)."),
         p(strong("Citation: "), "Large-scale plasma proteomics identifies molecularly distinct PD endotypes associated with motor and non-motor phenotypes. Nature Aging, 2026."),
         p(class="text-muted small", L()$disclaimer)
       )
