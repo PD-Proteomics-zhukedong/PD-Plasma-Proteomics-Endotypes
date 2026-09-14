@@ -12,7 +12,7 @@
 
 This repository provides the complete, leak-free computational pipeline and interactive decision-support application developed for our study:
 
-> **Large-scale plasma proteomics identifies molecularly distinct PD endotypes associated with motor and non-motor phenotypes.** *Nature Aging*, 2026.
+> **Large-scale plasma proteomics identifies molecularly distinct PD endotypes associated with motor and non-motor phenotypes.** *In revision at Nature Aging*, 2026.
 
 By integrating deep Orbitrap Astral Data-Independent Acquisition mass spectrometry (DIA-MS) across a dual-center East Asian cohort ($N = 1,119$), this project establishes a consensus signature of 823 strictly validated Meta-Differentially Expressed Proteins (Meta-DEPs), defines a parsimonious 16-protein diagnostic model, resolves Parkinson's disease into three reproducible molecular endotypes independent of pharmacological and chronicity confounders, and evaluates translational surrogate classifiers within international external benchmark cohorts ($N = 868$).
 
@@ -87,4 +87,4 @@ Data Visualization: ggplot2, ComplexHeatmap, circlize, ggpubr, ggalluvial, UpSet
 📄 License & Citation
 This repository is licensed under the MIT License - see the LICENSE file for terms.
 If you utilize this workflow, models, or data in your research, please cite:
-Zhu, K. et al. Large-scale plasma proteomics identifies molecularly distinct PD endotypes associated with motor and non-motor phenotypes. Nature Aging (2026).
+Zhu, K. et al. Large-scale plasma proteomics identifies molecularly distinct PD endotypes associated with motor and non-motor phenotypes. In revision at Nature Aging (2026).
