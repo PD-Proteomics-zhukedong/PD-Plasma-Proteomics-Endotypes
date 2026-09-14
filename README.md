@@ -70,7 +70,7 @@ Outputs: Figure 6A, 6B; Supplementary Tables ST22, ST23, ST24.
 🌐 Interactive Clinical Decision Support Portal
 An interactive web-based implementation of the diagnostic model, molecular endotyping classifier, and multi-domain symptom predictors is deployed for peer review:
 🔗 Portal URL: https://zhukedong.shinyapps.io/PD-Plasma-Proteomics-Portal/
-🔑 Reviewer Access Passcode: NatureAging2026
+🔑 Reviewer access passcode: Provided in the Response to Reviewers document.
 Core Modules:
 Individual Patient Profiler: Computes real-time 16-protein diagnostic probabilities, predicts molecular endotypes, estimates 7 continuous symptom scores, and provides biology-guided precision intervention pathways.
 Cohort Batch Profiling: High-throughput automated classification and 7-dimensional phenotypic radar visualization from user-provided proteomic tables (CSV).
