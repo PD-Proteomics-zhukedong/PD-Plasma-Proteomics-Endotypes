@@ -470,9 +470,7 @@ options(timeout = max(600, getOption("timeout")))
 panglao_candidates <- c(
   file.path(data_dir, "PanglaoDB_markers_27_Mar_2020.tsv.gz"),
   file.path(data_dir, "PanglaoDB_markers_27_Mar_2020.tsv"),
-  "PanglaoDB_markers_27_Mar_2020.tsv.gz",
-  "D:/网页下载/PanglaoDB_markers_27_Mar_2020.tsv.gz",
-  "D:/网页下载/PanglaoDB_markers_27_Mar_2020.tsv"
+  "PanglaoDB_markers_27_Mar_2020.tsv.gz"
 )
 
 panglao_path <- NA_character_
